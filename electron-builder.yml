@@ -1,0 +1,57 @@
+appId: com.ytmon.desktop
+productName: YTMon Desktop
+copyright: YTMon
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/**/*
+  - package.json
+  - '!**/*.map'
+
+asar: true
+
+# The main bundle needs node built-ins only; no native modules to rebuild.
+npmRebuild: false
+
+linux:
+  target:
+    - AppImage
+    - deb
+  category: AudioVideo
+  synopsis: Desktop client for the Termux YouTube Monitor
+
+win:
+  target:
+    - nsis
+    - zip
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.utilities
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    # The server is on the LAN over plain HTTP; this permits loopback and
+    # private-range addresses only, never arbitrary public hosts.
+    NSAppTransportSecurity:
+      NSAllowsLocalNetworking: true
+      NSExceptionDomains:
+        localhost:
+          NSExceptionAllowsInsecureHTTPLoads: true
+          NSIncludesSubdomains: true
+
+# Cleartext HTTP to a LAN address is required to reach the phone. Scoped to
+# private ranges so no public host can be reached over plaintext HTTP.
+# On macOS also set NSAppTransportSecurity in Info.plist (see docs).
