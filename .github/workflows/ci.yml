@@ -28,8 +28,13 @@ jobs:
       - name: Unit tests
         run: npm test
 
+      # Electron needs a display; xvfb gives the smoke test a headless one so
+      # the real window still has to load and stay alive.
+      - name: Install headless display
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
       - name: End-to-end smoke test
-        run: npm run smoke
+        run: xvfb-run -a npm run smoke
 
       - name: Build
         run: npm run build
