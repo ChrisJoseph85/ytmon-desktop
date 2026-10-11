@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Badge, Button, Field } from '../components/ui';
+import { Alert, Button, Field } from '../components/ui';
 import { useConnection } from '../state/connection';
 import { api, toast } from '../lib/bridge';
 import { validateServerUrl } from '@shared/format';
@@ -54,6 +54,23 @@ export function ConnectionScreen() {
       );
     } finally {
       setBusy(false);
+    }
+  };
+
+  const tokenStorageNote = (storage?: string) => {
+    switch (storage) {
+      case 'keychain':
+        return 'Saved in your OS keychain. The app reconnects automatically next time.';
+      case 'encrypted-file':
+        return (
+          'No OS keyring on this system, so the token is encrypted with a machine-local key (AES-256-GCM) ' +
+          'stored beside it. Never written in plain text; it protects the config file, not against someone ' +
+          'who can already read your home directory.'
+        );
+      case 'memory':
+        return 'Kept in memory for this session only. You will need to paste it again next launch.';
+      default:
+        return 'Not saved. Choose "Save token & connect" to stop re-entering it every time.';
     }
   };
 
@@ -199,33 +216,22 @@ export function ConnectionScreen() {
                 onKeyDown={(e) => e.key === 'Enter' && void saveToken(settings?.tokenKeychain !== false)}
               />
             </Field>
-            {!settings?.tokenKeychain ? (
-              <Alert tone="warn">
-                <strong>No OS keychain on this system</strong> — gnome-keyring/kwallet is unavailable, so the
-                token is never written to disk in plain text. You can still connect for this session; the token
-                lives in memory and is forgotten when the app quits. Enable a desktop keyring to store it
-                permanently.
-              </Alert>
-            ) : null}
             <div className="row row-wrap">
-              {settings?.tokenKeychain ? (
-                <Button variant="primary" loading={busy} disabled={!token.trim()} onClick={() => void saveToken(true)}>
-                  Save token & connect
-                </Button>
-              ) : (
-                <Button variant="primary" loading={busy} disabled={!token.trim()} onClick={() => void saveToken(false)}>
-                  Use for this session
-                </Button>
-              )}
-              {settings?.tokenSessionOnly ? (
-                <Badge tone="warn">Session only — not stored on disk</Badge>
-              ) : null}
+              <Button variant="primary" loading={busy} disabled={!token.trim()} onClick={() => void saveToken(true)}>
+                Save token & connect
+              </Button>
+              <Button loading={busy} disabled={!token.trim()} onClick={() => void saveToken(false)}>
+                This session only
+              </Button>
               {settings?.hasToken ? (
                 <Button variant="ghost" onClick={() => void disconnect()}>
                   Remove stored token
                 </Button>
               ) : null}
             </div>
+            <p className="tiny faint">
+              {tokenStorageNote(settings?.tokenStorage)}
+            </p>
           </>
         ) : null}
 

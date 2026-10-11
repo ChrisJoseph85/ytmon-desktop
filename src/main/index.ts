@@ -505,6 +505,36 @@ function registerIpc(): void {
 // ---- lifecycle ----------------------------------------------------------
 registerMediaSchemePrivileges();
 
+/**
+ * On Linux, Electron does not use a real OS keyring unless told which backend to
+ * use — without this, safeStorage reports "unavailable" and the token can only
+ * live in memory, so it has to be re-entered on every launch.
+ *
+ * Detection is by what is actually installed, not by desktop name: a plain
+ * session (Hyprland/sway/i3) can perfectly well have gnome-keyring, and a KDE
+ * session should keep kwallet.
+ */
+function hasGnomeKeyring(): boolean {
+  const searchPath = process.env.PATH ?? '';
+  for (const dir of searchPath.split(':')) {
+    if (!dir) continue;
+    try {
+      fs.accessSync(path.join(dir, 'gnome-keyring-daemon'), fs.constants.X_OK);
+      return true;
+    } catch {
+      /* keep looking */
+    }
+  }
+  return false;
+}
+
+if (process.platform === 'linux') {
+  const desktop = `${process.env.XDG_CURRENT_DESKTOP ?? ''} ${process.env.DESKTOP_SESSION ?? ''}`.toLowerCase();
+  if (/gnome|unity|ubuntu|cinnamon|xfce|mate/.test(desktop) || hasGnomeKeyring()) {
+    app.commandLine.appendSwitch('password-store', 'gnome-libsecret');
+  }
+}
+
 void app.whenReady().then(() => {
   api = currentApi();
   registerMediaProtocol(() => (api ??= currentApi()));

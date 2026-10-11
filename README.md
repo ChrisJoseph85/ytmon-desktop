@@ -27,6 +27,24 @@ It probes TCP, `/health`, `/server/info`, `/quality/options`, `/queue/stats`, `/
 metadata and a real `Range` request, and checks the responses against the documented contract
 (9 quality options, `QueueStats` keys, `Video` fields). It never writes anything.
 
+### The token is stored for you
+
+You only paste the token once.
+
+* **Linux** — the app enables Electron's `gnome-libsecret` password store when a
+  `gnome-keyring-daemon` is present (detected by what is installed, not by desktop
+  name, so Hyprland/sway sessions work too). The token goes into the OS keyring.
+* **macOS / Windows** — stored in Keychain / Credential Manager via `safeStorage`.
+* **No keyring at all** — the token is encrypted with AES-256-GCM using a random
+  machine-local key file (mode `0600`) beside the config. It is never written in
+  plain text, but it protects the config file rather than someone who can already
+  read your home directory.
+* **This session only** — skips all of the above; you re-paste next launch.
+
+The UI states which of these is in effect rather than making you guess. On launch it
+decrypts the stored token, reconnects, and only shows the pairing screen if that
+actually fails.
+
 ### Current status from this machine
 
 ```text

@@ -24,7 +24,7 @@ const NAV: { id: Route; label: string; icon: string }[] = [
 ];
 
 export function App() {
-  const { settings, health, healthMessage, ready, bootError, loadSettings, checkHealth } = useConnection();
+  const { settings, health, healthMessage, ready, probed, bootError, loadSettings, checkHealth } = useConnection();
   const [route, setRoute] = useState<Route>('library');
   const [version, setVersion] = useState('');
   const [fetchOpen, setFetchOpen] = useState(false);
@@ -159,7 +159,22 @@ export function App() {
     );
   }
 
-  // First launch or unreachable/unauthorized: show the connection flow.
+  // Still starting up: a stored token is being decrypted and probed, so show a
+  // splash rather than flashing the pairing screen on every launch.
+  if (!probed) {
+    return (
+      <div className="onboard">
+        <div className="onboard-card stack" style={{ alignItems: 'center', textAlign: 'center' }}>
+          <div className="brand-mark" aria-hidden>YT</div>
+          <div className="row muted" style={{ gap: 8 }} role="status" aria-live="polite">
+            <span className="spinner" aria-hidden /> Connecting to {settings?.serverUrl ?? 'the server'}…
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // First launch, unreachable, or unauthorized: show the connection flow.
   if (!ready || health === 'unauthorized') {
     return (
       <>
@@ -209,7 +224,13 @@ export function App() {
         <div className="stack" style={{ gap: 6 }}>
           <div className="tiny faint">Desktop client v{version || '—'}</div>
           <Button size="sm" variant="ghost" onClick={() => setRoute('settings')}>
-            {!settings?.hasToken ? 'No token' : settings.tokenSessionOnly ? 'Token: this session' : 'Token saved ✓'}
+            {!settings?.hasToken
+              ? 'No token'
+              : settings.tokenStorage === 'keychain'
+                ? 'Token ✓ keychain'
+                : settings.tokenStorage === 'encrypted-file'
+                  ? 'Token ✓ encrypted'
+                  : 'Token: this session'}
           </Button>
         </div>
       </nav>

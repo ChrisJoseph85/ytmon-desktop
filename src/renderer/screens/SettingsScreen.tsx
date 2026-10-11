@@ -181,14 +181,16 @@ export function SettingsScreen() {
           </Field>
           <div className="row row-wrap">
             <Badge tone={settings?.hasToken ? (settings?.tokenSessionOnly ? 'warn' : 'success') : 'warn'}>
-              {settings?.hasToken
-                ? settings?.tokenSessionOnly
-                  ? 'Token in memory (this session only)'
-                  : 'Token saved in OS keychain'
-                : 'No token stored'}
+              {!settings?.hasToken
+                ? 'No token stored'
+                : settings.tokenStorage === 'keychain'
+                  ? 'Token in OS keychain'
+                  : settings.tokenStorage === 'encrypted-file'
+                    ? 'Token encrypted on this computer'
+                    : 'Token in memory (this session only)'}
             </Badge>
-            <Badge tone={settings?.tokenKeychain ? 'success' : 'warn'}>
-              {settings?.tokenKeychain ? 'Keychain available' : 'No OS keychain'}
+            <Badge tone={settings?.tokenKeychain ? 'success' : 'info'}>
+              {settings?.tokenKeychain ? 'OS keychain in use' : 'Encrypted local storage'}
             </Badge>
             {settings?.hasToken ? (
               <Button size="sm" variant="ghost" onClick={() => void setToken(null)}>

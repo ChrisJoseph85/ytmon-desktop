@@ -1,7 +1,9 @@
 import { app, safeStorage } from 'electron';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_SERVER_URL, LOOPBACK_SERVER_URL, validateServerUrl } from '../shared/format';
+import os from 'node:os';
 
 export interface AppSettings {
   serverUrl: string;
@@ -25,6 +27,66 @@ const DEFAULTS: AppSettings = {
 };
 
 let cached: AppSettings | null = null;
+
+/**
+ * Where the token actually lives. Surfaced in the UI so it is never a mystery.
+ */
+export type TokenStorage = 'keychain' | 'encrypted-file' | 'memory' | 'none';
+
+/**
+ * Machine-local AES key used only when the OS has no keyring.
+ *
+ * This is deliberately NOT presented as strong as a keychain: it stops a token
+ * leaking through a settings.json backup or a stray screenshot of the config,
+ * but anyone who can read the keystore file as this user can also decrypt.
+ * The key file is created 0600 and never leaves the machine.
+ */
+let fileKey: Buffer | null = null;
+
+function keystorePath(): string {
+  return path.join(app.getPath('userData'), 'keystore');
+}
+
+function loadOrCreateKey(): Buffer {
+  if (fileKey) return fileKey;
+  const p = keystorePath();
+  try {
+    fileKey = crypto.randomBytes(32);
+    fs.writeFileSync(p, fileKey, { mode: 0o600 });
+    fs.chmodSync(p, 0o600);
+  } catch {
+    // Read-only profile: fall back to a key derived from stable machine facts.
+    fileKey = crypto.createHash('sha256').update(`${os.hostname()}:${os.userInfo().username}:ytmon`).digest();
+  }
+  return fileKey;
+}
+
+function encryptWithFileKey(plain: string): string {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', loadOrCreateKey(), iv);
+  const data = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
+  return JSON.stringify({
+    v: 1,
+    iv: iv.toString('base64'),
+    tag: cipher.getAuthTag().toString('base64'),
+    data: data.toString('base64'),
+  });
+}
+
+function decryptWithFileKey(blob: string): string | null {
+  try {
+    const parsed = JSON.parse(blob) as { iv: string; tag: string; data: string };
+    const decipher = crypto.createDecipheriv(
+      'aes-256-gcm',
+      loadOrCreateKey(),
+      Buffer.from(parsed.iv, 'base64'),
+    );
+    decipher.setAuthTag(Buffer.from(parsed.tag, 'base64'));
+    return Buffer.concat([decipher.update(Buffer.from(parsed.data, 'base64')), decipher.final()]).toString('utf8');
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Session-only token, held in main-process memory and NEVER written to disk.
@@ -73,7 +135,8 @@ export function publicSettings() {
     hasToken: Boolean(readToken()),
     tokenKeychain: safeStorage.isEncryptionAvailable(),
     // True when the token lives in memory only and will be forgotten on quit.
-    tokenSessionOnly: !safeStorage.isEncryptionAvailable() && Boolean(sessionToken),
+    tokenSessionOnly: tokenStorage() === 'memory',
+    tokenStorage: tokenStorage(),
   };
 }
 
@@ -91,7 +154,8 @@ export function useLoopback(): void {
 /** Returns the plaintext token to main-process callers only. */
 export function readToken(): string | null {
   const s = loadSettings();
-  if (!s.encryptedToken) return sessionToken;
+  if (sessionToken) return sessionToken;
+  if (!s.encryptedToken) return null;
   if (safeStorage.isEncryptionAvailable()) {
     try {
       return safeStorage.decryptString(Buffer.from(s.encryptedToken, 'base64'));
@@ -99,9 +163,14 @@ export function readToken(): string | null {
       return null;
     }
   }
-  // No OS keychain (rare: some Linux desktops). We refuse to hand out a
-  // plaintext-at-rest secret rather than silently weakening security.
-  return null;
+  return decryptWithFileKey(s.encryptedToken);
+}
+
+export function tokenStorage(): TokenStorage {
+  if (sessionToken) return 'memory';
+  const s = loadSettings();
+  if (!s.encryptedToken) return 'none';
+  return safeStorage.isEncryptionAvailable() ? 'keychain' : 'encrypted-file';
 }
 
 /**
@@ -120,27 +189,27 @@ export function readToken(): string | null {
 export function writeToken(
   token: string | null,
   persist = true,
-): { ok: boolean; sessionOnly?: boolean; reason?: string } {
+): { ok: boolean; sessionOnly?: boolean; reason?: string; storage?: TokenStorage } {
   if (token === null || token.trim() === '') {
     saveSettings({ encryptedToken: null });
     sessionToken = null;
-    return { ok: true };
+    return { ok: true, storage: 'none' };
   }
   const value = token.trim();
 
   if (!safeStorage.isEncryptionAvailable()) {
-    if (persist) {
-      return {
-        ok: false,
-        reason:
-          'No OS keychain is available on this system, so the token cannot be stored securely. Use "this session only" instead, or enable a desktop keyring (gnome-keyring/kwallet).',
-      };
+    if (!persist) {
+      sessionToken = value;
+      return { ok: true, sessionOnly: true, storage: 'memory' };
     }
-    sessionToken = value;
-    return { ok: true, sessionOnly: true };
+    // No keyring: encrypt with a machine-local key rather than making the user
+    // re-paste the token on every launch, and never write it in plain text.
+    sessionToken = null;
+    saveSettings({ encryptedToken: encryptWithFileKey(value) });
+    return { ok: true, storage: 'encrypted-file' };
   }
   const buf = safeStorage.encryptString(value);
   saveSettings({ encryptedToken: buf.toString('base64') });
   sessionToken = null;
-  return { ok: true };
+  return { ok: true, storage: 'keychain' };
 }

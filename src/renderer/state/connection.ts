@@ -12,6 +12,10 @@ interface ConnectionState {
   healthDetail: HealthStatus | null;
   /** True once we have confirmed at least one successful health probe. */
   ready: boolean;
+  /** True once the FIRST probe has finished either way — before this we are
+   *  still starting up and must not show the pairing screen, or it flashes on
+   *  every launch even when a token is already stored. */
+  probed: boolean;
   bootError: string | null;
   checkHealth(signal?: AbortSignal): Promise<void>;
   loadSettings(): Promise<void>;
@@ -28,6 +32,7 @@ export const useConnection = create<ConnectionState>((set, get) => ({
   serverInfo: null,
   healthDetail: null,
   ready: false,
+  probed: false,
   bootError: null,
 
   async loadSettings() {
@@ -63,12 +68,13 @@ export const useConnection = create<ConnectionState>((set, get) => ({
                   ? 'The stored token was rejected — it may have been revoked on the phone.'
                   : `Reachable, but this server requires a token (LAN mode is on).`,
               ready: false,
+              probed: true,
             });
             return;
           }
           // A non-auth failure here is not fatal; fall through to connected.
         }
-        set({ health: status, healthMessage: null, ready: true, bootError: null });
+        set({ health: status, healthMessage: null, ready: true, probed: true, bootError: null });
         void api
           .serverInfo()
           .then((info: Record<string, unknown>) => set({ serverInfo: info }))
@@ -93,6 +99,7 @@ export const useConnection = create<ConnectionState>((set, get) => ({
         health: 'unreachable',
         healthMessage: err.message,
         ready: false,
+        probed: true,
       });
     }
   },

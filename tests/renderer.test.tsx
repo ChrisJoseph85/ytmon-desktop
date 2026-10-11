@@ -31,7 +31,7 @@ function fakeBridge(overrides: Record<string, unknown> = {}) {
     settings: {
       get: async () => ok(settings),
       setServerUrl: async (u: string) => ok({ ...settings, serverUrl: u }),
-      setToken: async () => ok({ ...settings, hasToken: true }),
+      setToken: async () => ok({ ...settings, hasToken: true, tokenStorage: 'keychain' }),
       setPreferences: async () => ok(settings),
       useLoopback: async () => ok({ ...settings, serverUrl: 'http://127.0.0.1:8765' }),
     },
@@ -129,6 +129,7 @@ const FAKE_SETTINGS = {
   hasToken: false,
   tokenKeychain: true,
   tokenSessionOnly: false,
+  tokenStorage: 'none' as const,
 };
 
 beforeEach(() => {

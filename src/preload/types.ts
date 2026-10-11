@@ -37,6 +37,8 @@ export interface PublicSettings {
   tokenKeychain: boolean;
   /** Token is in memory only and will be forgotten when the app quits. */
   tokenSessionOnly: boolean;
+  /** Where the token is actually kept: keychain | encrypted-file | memory | none. */
+  tokenStorage: 'keychain' | 'encrypted-file' | 'memory' | 'none';
 }
 
 export interface SaveResult {
