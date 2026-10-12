@@ -4,6 +4,8 @@ node_modules/
 # build output
 dist/
 release/
+# AppImage self-extraction directory (271 MB, recreated on every build)
+squashfs-root/
 *.tsbuildinfo
 
 # runtime state — never commit the app's settings file (it can hold an

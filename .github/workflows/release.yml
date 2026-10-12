@@ -1,0 +1,87 @@
+name: Release
+
+# Anyone can get an installer without owning a Mac or a Windows PC:
+#   Actions -> Release -> Run workflow
+# or push a tag:  git tag v1.0.0 && git push --tags
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Create a GitHub release with these artifacts"
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux (AppImage + deb)
+            os: ubuntu-latest
+            args: --linux --x64
+          - label: windows (NSIS installer)
+            os: windows-latest
+            args: --win --x64
+          - label: macOS (dmg, arm64 + x64)
+            os: macos-latest
+            args: --mac --x64 --arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify before packaging
+        # Never ship a build that does not pass its own checks.
+        run: |
+          npm run typecheck
+          npm run lint
+          npm test
+
+      - name: Package
+        run: npx electron-builder ${{ matrix.args }} --publish never
+
+      - name: Collect artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ytmon-desktop-${{ matrix.label }}
+          path: |
+            release/*.AppImage
+            release/*.deb
+            release/*.exe
+            release/*.dmg
+            release/*.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' && inputs.publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+          draft: true

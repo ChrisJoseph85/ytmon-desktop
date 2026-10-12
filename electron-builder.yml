@@ -2,6 +2,10 @@ appId: com.ytmon.desktop
 productName: YTMon Desktop
 copyright: YTMon
 
+# One 1024x1024 PNG; electron-builder derives .ico (Windows) and .icns (macOS)
+# from it. Regenerate with: npm run icon
+icon: build/icon.png
+
 directories:
   output: release
   buildResources: build
