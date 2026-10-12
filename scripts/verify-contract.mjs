@@ -140,8 +140,51 @@ check(
 );
 assertFields('Channel', [
   'id', 'channel_id', 'url', 'title', 'enabled', 'quality_override',
+  'mode', 'schedule_enabled', 'schedule_days', 'schedule_time', 'due_now', 'next_due',
   'last_checked_at', 'last_uploaded_at', 'created_at', 'updated_at',
 ]);
+// The client never computes due_now / next_due: it reads both from the server.
+{
+  const policyProps = new Set(Object.keys(C.Channel?.properties ?? {}));
+  const serverComputed = ['due_now', 'next_due'].filter((f) => !policyProps.has(f));
+  if (serverComputed.length > 0) {
+    warnings.push(
+      `Channel does NOT expose ${serverComputed.join(', ')} — the client cannot show whether a ` +
+        'scheduled channel is due without them.',
+    );
+  } else {
+    passes.push('Channel exposes due_now + next_due (client reads, never recomputes)');
+  }
+}
+assertFields('MonitorScanResult', [
+  'channels_scanned', 'discovered', 'queued', 'duplicates', 'filtered', 'errors',
+]);
+// `held` = discovered but not downloaded (manual / not due). The client shows
+// it as an outcome; if the server omits it, that framing silently disappears.
+{
+  const scanProps = fieldsOf('MonitorScanResult');
+  if (scanProps.size > 0 && scanProps.has('held')) {
+    passes.push('MonitorScanResult declares held (manual / not due)');
+  } else {
+    warnings.push(
+      'MonitorScanResult does NOT declare `held` — videos held back by a manual channel or a ' +
+        'schedule look identical to videos that were never found. The client reads it if present.',
+    );
+  }
+}
+assertFields('SubscriptionImportResult', ['source', 'imported', 'updated', 'skipped', 'total', 'errors']);
+{
+  const statusFields = new Set([
+    ...fieldsOf('SubscriptionsStatus'),
+    ...Object.keys(inlineModel('get', '/api/v1/subscriptions/status')?.properties ?? {}),
+  ]);
+  if (statusFields.size > 0 && !statusFields.has('cookies_configured')) {
+    failures.push(
+      'GET /subscriptions/status does not declare cookies_configured — the client cannot tell ' +
+        'whether the feed import source is usable before offering it.',
+    );
+  }
+}
 assertFields('DeleteResult', ['deleted', 'files_deleted', 'files_missing', 'errors']);
 assertFields('DeleteRequest', ['video_ids', 'delete_files', 'dry_run']);
 assertFields('FileMetadata', [
@@ -216,6 +259,12 @@ const endpoints = [
   ['patch', '/api/v1/channels/{channel_id}'],
   ['delete', '/api/v1/channels/{channel_id}'],
   ['post', '/api/v1/channels/{channel_id}/scan'],
+  ['patch', '/api/v1/channels/{channel_id}/policy'],
+  ['post', '/api/v1/channels/policy/bulk'],
+  ['get', '/api/v1/subscriptions'],
+  ['get', '/api/v1/subscriptions/status'],
+  ['post', '/api/v1/subscriptions/import'],
+  ['get', '/api/v1/subscriptions/snapshots/{snapshot_id}'],
   ['get', '/api/v1/videos'],
   ['get', '/api/v1/videos/by-id/{video_id}'],
   ['patch', '/api/v1/videos/{video_id}/watched'],

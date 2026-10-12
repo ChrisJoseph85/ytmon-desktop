@@ -63,6 +63,18 @@ export class YtmonError extends Error {
         );
       case 'invalid_download_dir':
         return 'That download directory was refused — the server rejects filesystem roots and parent directories.';
+      case 'data_required':
+        return 'Paste the contents of your Takeout subscriptions.json first — the takeout source reads the file from the paste, not from the phone.';
+      case 'invalid_takeout':
+        return 'That JSON is not a Takeout subscriptions list. Paste the whole contents of subscriptions.json (an array of objects with a contentDetails.channelId).';
+      case 'import_failed':
+        return 'The feed import failed — the YouTube cookies on the phone have most likely expired. Use Takeout instead; it needs nothing configured on the server.';
+      case 'invalid_schedule_time':
+        return 'Use a 24-hour time such as 08:30.';
+      case 'invalid_schedule_days':
+        return 'Pick weekdays from mon, tue, wed, thu, fri, sat, sun.';
+      case 'invalid_mode':
+        return 'A channel is either automatic or manual.';
       default:
         return null;
     }

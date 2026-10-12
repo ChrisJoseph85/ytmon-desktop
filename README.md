@@ -87,9 +87,11 @@ curl http://192.168.1.100:8765/api/v1/health
 
 | Screen | Highlights |
 | --- | --- |
-| **Library** | All / New / Unwatched / Watched / Downloading / Completed / Failed views, Shorts/regular/all filters, search, sorting, channel filter, pagination, shift-click multi-select, bulk delete, in-app player with seeking. |
+| **Library** | All / New / Unwatched / Watched / Downloading / Completed / Failed / **Not downloaded** views, Shorts/regular/all filters, search, sorting, channel filter, pagination, shift-click multi-select, bulk delete, in-app player with seeking. Discovered-but-not-downloaded uploads get a one-click **Get**. |
 | **Downloads** | The phone's queue (queued/downloading/completed/failed/skipped/unavailable), per-job progress and ETA, and separately the files moving to *this* computer with progress, cancel and resume. |
 | **Channels** | Add / enable / pause / scan / remove, per-channel quality overrides, and **Add in bulk** — paste a subscriptions list (URLs, @handles, bare UC ids, a Takeout CSV) or import a file. |
+| **Auto / Manual + schedules** | Per-channel **Auto ↔ Manual** toggle and a download schedule (weekday chips + 24h time picker). Multi-select any number of channels for **Make automatic** / **Make manual** / **Set schedule**. Manual channels are still *discovered* — they just are never auto-downloaded. Due state is read from the server (`due_now` / `next_due`), never computed on the client. |
+| **Import subscriptions** | Paste a Google Takeout `subscriptions.json` (the default — needs nothing configured on the phone) or import from your YouTube feed via the server's cookies. Shows imported / updated / skipped counts, the "last imported … from takeout" line, and explains up front that the feed option needs `YTMON_COOKIES_FILE` when cookies are missing. Imported channels arrive **manual**, so a 300-channel import doesn't start 300 downloads. |
 | **Files** | The library as the phone stores it: folders → subfolders → items from `GET /library/tree`, with an order selector and a per-folder item limit. Shows *"showing N of M"* when a folder is truncated. |
 | **Playlists** | Subscribe to playlists and Watch Later, live per-source counts ("13 of 19 downloaded, 6 failed"), a per-source quality **and** Video/Audio override that beats the global setting, manual scans, and an explicit explanation when Watch Later is empty because cookies are not set. |
 | **Fetch a link** | Paste any video/playlist/channel link. Always previews first (`download:false`) so nothing is queued by surprise, then confirms. Duplicates and unavailable items are shown, never dropped. |
@@ -199,7 +201,7 @@ shows the stored value, because the Android app may have written concurrently (l
 
 | Status | UI behaviour |
 | --- | --- |
-| `discovered` | Queued-looking; no file actions available. |
+| `discovered` | Found by discovery but **not downloaded** — the resting state of a manual channel, or of one that is not due yet. Labelled *"Found by discovery — not downloaded yet"* with a one-click **Get** to fetch it. No file actions (there is no file yet). |
 | `queued` / `downloading` | Progress + speed + ETA; unqueue/cancel allowed where the server permits. |
 | `completed` | Save / play / share file available. |
 | `failed` | `error_message` shown plus a **Retry** button. |

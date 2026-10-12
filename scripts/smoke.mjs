@@ -69,6 +69,25 @@ const VIDEOS = [
   },
 ];
 
+const CHANNEL = {
+  id: 1,
+  channel_id: 'UCdemo',
+  url: 'https://www.youtube.com/channel/UCdemo',
+  title: 'Demo Channel',
+  enabled: true,
+  quality_override: null,
+  mode: 'auto',
+  schedule_enabled: false,
+  schedule_days: [],
+  schedule_time: null,
+  due_now: true,
+  next_due: null,
+  last_checked_at: null,
+  last_uploaded_at: null,
+  created_at: null,
+  updated_at: null,
+};
+
 const FILE_BODY = Buffer.alloc(64 * 1024, 0x41);
 const qualitySettings = {
   quality: '1080p',
@@ -81,7 +100,7 @@ const qualitySettings = {
   download_dir: null,
   max_concurrent_downloads: 2,
 };
-const state = { videos: [...VIDEOS], qualitySettings, watched: 0, deletes: 0, ranges: [], requireAuth: false };
+const state = { videos: [...VIDEOS], qualitySettings, watched: 0, deletes: 0, ranges: [], requireAuth: false, channels: [CHANNEL], policies: [], imported: null };
 
 const send = (res, code, body, headers = {}) => {
   const payload = typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body);
@@ -167,7 +186,72 @@ const server = http.createServer((req, res) => {
       per_channel_overrides: {},
     });
   }
-  if (p === '/channels') return send(res, 200, []);
+  if (p === '/channels') return send(res, 200, state.channels);
+
+  // ---- subscriptions + per-channel policy --------------------------------
+  if (p === '/subscriptions') {
+    const mode = url.searchParams.get('mode');
+    const list = mode ? state.channels.filter((c) => c.mode === mode) : state.channels;
+    return send(res, 200, list);
+  }
+  if (p === '/subscriptions/status') {
+    return send(res, 200, {
+      cookies_configured: false,
+      subscriptions: state.channels.length,
+      last_import_at: state.imported?.created_at ?? null,
+      last_import_source: state.imported?.source ?? null,
+    });
+  }
+  if (p === '/subscriptions/import' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      const payload = JSON.parse(body || '{}');
+      if (payload.source !== 'takeout') {
+        return send(res, 400, { error: { code: 'import_failed', message: 'cookies expired', details: null } });
+      }
+      if (!payload.data || !Array.isArray(JSON.parse(payload.data))) {
+        return send(res, 400, { error: { code: 'invalid_takeout', message: 'not a subscriptions array', details: null } });
+      }
+      state.imported = { source: 'takeout', created_at: '2026-10-10T12:00:00+00:00' };
+      return send(res, 200, { source: 'takeout', imported: 1, updated: 0, skipped: 0, total: 1, errors: [] });
+    });
+    return;
+  }
+  const snapshot = /^\/subscriptions\/snapshots\/([^/]+)$/.exec(p);
+  if (snapshot) return send(res, 200, { id: snapshot[1], source: 'takeout', imported: 1, created_at: '2026-10-10T12:00:00+00:00' });
+
+  const policy = /^\/channels\/([^/]+)\/policy$/.exec(p);
+  if (policy && req.method === 'PATCH') {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      const patch = JSON.parse(body || '{}');
+      state.policies.push({ channel_id: policy[1], patch });
+      const c = state.channels.find((x) => x.channel_id === policy[1]);
+      if (!c) return send(res, 404, { error: { code: 'not_found', message: 'channel not found', details: null } });
+      Object.assign(c, patch);
+      return send(res, 200, c);
+    });
+    return;
+  }
+  if (p === '/channels/policy/bulk' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      const { channel_ids: ids, ...patch } = JSON.parse(body || '{}');
+      let updated = 0;
+      for (const id of ids ?? []) {
+        const c = state.channels.find((x) => x.channel_id === id);
+        if (c) {
+          Object.assign(c, patch);
+          updated += 1;
+        }
+      }
+      return send(res, 200, { updated });
+    });
+    return;
+  }
   if (p === '/retention') return send(res, 200, { delete_file_when_watched: false, retention_days: null, max_library_items: null });
   if (p === '/monitor') return send(res, 200, { enabled: true, interval_minutes: 15, window_hours: 24, future_only: true, content_filter: 'all' });
   if (p === '/storage') return send(res, 200, { bytes: 12345, files: 2, free: 999 });
@@ -224,9 +308,9 @@ server.listen(PORT, '127.0.0.1', () => {
   };
 
   const timer = setTimeout(() => {
-    console.error('SMOKE FAIL: app did not exit cleanly within 15s');
+    console.error('SMOKE FAIL: app did not exit cleanly within 30s');
     done(1);
-  }, 15000);
+  }, 30000);
 
   // Drive the real API through the same client the app uses, against the fake
   // server, to verify the vertical slice contract end to end.
@@ -267,6 +351,42 @@ server.listen(PORT, '127.0.0.1', () => {
       const opts = await get('/quality/options');
       checks.push(['9 quality options', opts.body.options.length === 9]);
 
+      // ---- subscriptions + channel policy ------------------------------
+      const post = (path, body) =>
+        get(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+      const subStatus = await get('/subscriptions/status');
+      // Without cookies the client must not offer the feed source.
+      checks.push(['subscriptions status reports cookies_configured', subStatus.body.cookies_configured === false]);
+
+      const imported = await post('/subscriptions/import', {
+        source: 'takeout',
+        data: '[{"contentDetails":{"channelId":"UCdemo"}}]',
+      });
+      checks.push(['takeout import returns counts', imported.body.imported === 1 && imported.body.total === 1]);
+
+      const badTakeout = await post('/subscriptions/import', { source: 'takeout', data: '{"nope":1}' });
+      checks.push(['non-array takeout is 400 invalid_takeout', badTakeout.status === 400 && badTakeout.body.error.code === 'invalid_takeout']);
+
+      const snap = await get('/subscriptions/snapshots/1');
+      checks.push(['snapshot re-reads a stored import', snap.body.id === '1' && snap.body.source === 'takeout']);
+
+      const policy = await get('/channels/UCdemo/policy', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'manual', schedule_enabled: true, schedule_days: ['mon'], schedule_time: '08:30' }),
+      });
+      checks.push(['policy PATCH writes mode + schedule', policy.body.mode === 'manual' && policy.body.schedule_time === '08:30']);
+
+      const manualOnly = await get('/subscriptions?mode=manual');
+      checks.push(['?mode= filters server-side', manualOnly.body.length === 1 && manualOnly.body[0].mode === 'manual']);
+      const autoOnly = await get('/subscriptions?mode=auto');
+      checks.push(['?mode=auto excludes manual channels', autoOnly.body.length === 0]);
+
+      const bulk = await post('/channels/policy/bulk', { channel_ids: ['UCdemo'], mode: 'auto' });
+      checks.push(['bulk policy reports the updated count', bulk.body.updated === 1]);
+      checks.push(['bulk policy applied', state.channels[0].mode === 'auto']);
+
       const meta = await get('/files/aaaaaaaaaaa/metadata');
       checks.push(['file metadata', meta.body.size_bytes === FILE_BODY.length]);
 
@@ -295,7 +415,13 @@ server.listen(PORT, '127.0.0.1', () => {
       checks.push(['missing file 404s cleanly', missing.status === 404]);
 
       // The real Electron window must load the built renderer without a crash.
-      await new Promise((r) => setTimeout(r, 1500));
+      // Poll for the ready marker rather than sleeping a fixed amount: on a
+      // loaded machine the renderer can take longer than any fixed wait.
+      const deadline = Date.now() + 8000;
+      while (!out.includes('ytmon: window ready') && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      await new Promise((r) => setTimeout(r, 500));
       checks.push(['electron window loaded the renderer', out.includes('ytmon: window ready')]);
       checks.push(['no preload failure', !out.includes('preload failed')]);
       checks.push(['renderer process stayed alive', !out.includes('renderer gone')]);

@@ -1,38 +1,70 @@
-import { useEffect, useState } from 'react';
-import { Alert, Badge, Button, Card, Field, Loading, Modal, Select, Switch } from '../components/ui';
-import { api, toast, type ChannelShape } from '../lib/bridge';
+import { useEffect, useMemo, useState } from 'react';
+import { Alert, Badge, Button, Card, Field, Loading, Modal, PillGroup, Select, Switch } from '../components/ui';
+import { api, toast, type ChannelShape, type SubscriptionsStatus } from '../lib/bridge';
 import { usePolling } from '../lib/hooks';
 import { BulkAddModal } from '../components/BulkAddModal';
+import { PolicyEditorModal, BulkPolicyModal } from '../components/PolicyEditorModal';
+import {
+  CookiesBadge,
+  ImportSubscriptionsModal,
+  LastImportLine,
+} from '../components/ImportSubscriptionsModal';
 import { qualityLabelsFrom } from '../lib/labels';
 import { pickCanonicalUrl, pickChannelId } from '../lib/channel-url';
 import { formatDateTime } from '@shared/format';
+import {
+  channelMode,
+  describePolicy,
+  filterChannels,
+  isScheduled,
+  scheduleSummary,
+  channelScheduleDays,
+  type ChannelFilter,
+} from '@shared/schedule';
 import type { MediaType, Quality } from '@shared/types';
+
+/** Stable empty array so the memos below do not re-run on every render. */
+const EMPTY_CHANNELS: ChannelShape[] = [];
 
 export function ChannelsScreen() {
   const channels = usePolling(() => api.listChannels(), 25_000);
   const [options, setOptions] = useState<{ value: string; label: string }[]>([]);
   const [editing, setEditing] = useState<ChannelShape | null>(null);
+  const [policyFor, setPolicyFor] = useState<ChannelShape | null>(null);
   const [adding, setAdding] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<ChannelShape | null>(null);
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [subStatus, setSubStatus] = useState<SubscriptionsStatus | null>(null);
+  const [filter, setFilter] = useState<ChannelFilter>('all');
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkPolicyOpen, setBulkPolicyOpen] = useState(false);
 
   useEffect(() => {
     void api
       .qualityOptions()
       .then((q) => setOptions(qualityLabelsFrom(q.options)))
       .catch(() => undefined);
+    void api.subscriptionsStatus().then(setSubStatus).catch(() => undefined);
   }, []);
 
   const scan = async (c: ChannelShape) => {
     try {
       const r = await api.scanChannel(c.channel_id);
       const parts = [`${r.discovered} new`, `${r.queued} queued`, `${r.duplicates} duplicates skipped`];
+      // `held` is an outcome, not a failure: the uploads WERE discovered, they
+      // just were not downloaded because the channel is manual or not due.
+      if (r.held && r.held > 0) parts.push(`${r.held} held for later`);
       // discovered 0 + a big filtered count almost always means the server's
       // publication window is narrower than the channel's upload cadence.
       if (r.discovered === 0 && r.filtered > 0) {
         const m = await api.getMonitor().catch(() => null);
         parts.push(`${r.filtered} filtered by the ${m?.window_hours ?? '?'}h publication window`);
         toast.info(`${c.title || c.channel_id}: nothing new. ${parts.join(' · ')} — widen it in Settings → Monitoring if this channel uploads rarely.`);
+      } else if (r.held && r.held > 0 && r.queued === 0) {
+        toast.info(
+          `${c.title || c.channel_id}: ${parts.join(' · ')}. Nothing downloaded — the channel is manual or not due yet.`,
+        );
       } else {
         toast.success(`${c.title || c.channel_id}: ${parts.join(' · ')}.`);
       }
@@ -42,7 +74,46 @@ export function ChannelsScreen() {
     }
   };
 
-  const list = channels.data ?? [];
+  const setMode = async (c: ChannelShape, mode: 'auto' | 'manual') => {
+    try {
+      await api.setChannelPolicy(c.channel_id, { mode });
+      toast.success(
+        mode === 'manual'
+          ? `${c.title || c.channel_id} is manual. Uploads are still discovered — fetch one to download it.`
+          : `${c.title || c.channel_id} is automatic again.`,
+      );
+      channels.refresh();
+    } catch (e) {
+      toast.fromError(e);
+    }
+  };
+
+  const list = channels.data ?? EMPTY_CHANNELS;
+  const visible = useMemo(() => filterChannels(list, filter), [list, filter]);
+  const counts = useMemo(
+    () => ({
+      all: list.length,
+      auto: list.filter((c) => channelMode(c) === 'auto').length,
+      manual: list.filter((c) => channelMode(c) === 'manual').length,
+      scheduled: list.filter((c) => isScheduled(c)).length,
+    }),
+    [list],
+  );
+
+  const selectedIds = useMemo(() => [...selected].filter((id) => list.some((c) => c.channel_id === id)), [selected, list]);
+
+  const toggleSelect = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const refreshAll = () => {
+    channels.refresh();
+    void api.subscriptionsStatus().then(setSubStatus).catch(() => undefined);
+  };
 
   return (
     <div className="stack" style={{ gap: 16 }}>
@@ -51,16 +122,78 @@ export function ChannelsScreen() {
           {list.length} channel{list.length === 1 ? '' : 's'} tracked
         </span>
         <span className="spacer" />
-        <Button onClick={channels.refresh} loading={channels.loading}>
+        <Button onClick={refreshAll} loading={channels.loading}>
           Refresh
         </Button>
         <Button onClick={() => setBulkOpen(true)} title="Paste or import a whole list of channels">
           Add in bulk
         </Button>
+        <Button onClick={() => setImportOpen(true)} title="Import your YouTube subscriptions (Takeout or feed)">
+          Import subscriptions
+        </Button>
         <Button variant="primary" onClick={() => setAdding(true)}>
           Add channel
         </Button>
       </div>
+
+      <div className="row row-wrap" style={{ gap: 10 }}>
+        <PillGroup
+          value={filter}
+          ariaLabel="Filter channels"
+          onChange={setFilter}
+          options={[
+            { value: 'all', label: 'All', count: counts.all },
+            { value: 'auto', label: 'Auto', count: counts.auto },
+            { value: 'manual', label: 'Manual', count: counts.manual },
+            { value: 'scheduled', label: 'Scheduled', count: counts.scheduled },
+          ]}
+        />
+        <span className="spacer" />
+        <LastImportLine status={subStatus} />
+        <CookiesBadge status={subStatus} />
+      </div>
+
+      {selectedIds.length > 0 ? (
+        <div className="row row-wrap" style={{ gap: 8 }}>
+          <Badge tone="accent">{selectedIds.length} selected</Badge>
+          <Button
+            size="sm"
+            onClick={() =>
+              void api
+                .bulkChannelPolicy({ channel_ids: selectedIds, mode: 'auto' })
+                .then((r) => {
+                  toast.success(`Made ${r.updated} channel${r.updated === 1 ? '' : 's'} automatic.`);
+                  setSelected(new Set());
+                  channels.refresh();
+                })
+                .catch((e: Error) => toast.fromError(e))
+            }
+          >
+            Make automatic
+          </Button>
+          <Button
+            size="sm"
+            onClick={() =>
+              void api
+                .bulkChannelPolicy({ channel_ids: selectedIds, mode: 'manual' })
+                .then((r) => {
+                  toast.success(`Made ${r.updated} channel${r.updated === 1 ? '' : 's'} manual. Their uploads are still discovered.`);
+                  setSelected(new Set());
+                  channels.refresh();
+                })
+                .catch((e: Error) => toast.fromError(e))
+            }
+          >
+            Make manual
+          </Button>
+          <Button size="sm" onClick={() => setBulkPolicyOpen(true)}>
+            Set schedule…
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+            Clear
+          </Button>
+        </div>
+      ) : null}
 
       {channels.error ? <Alert tone="danger">{channels.error}</Alert> : null}
 
@@ -69,63 +202,125 @@ export function ChannelsScreen() {
       ) : list.length === 0 ? (
         <Card>
           <p className="muted">
-            No channels yet. Add one by pasting a channel URL or id — the server resolves it via the feed and
-            schedules downloads itself.
+            No channels yet. Add one by pasting a channel URL or id, or import your whole YouTube subscription list —
+            the server resolves them and schedules downloads itself.
           </p>
+        </Card>
+      ) : visible.length === 0 ? (
+        <Card>
+          <p className="muted">No channels match this filter.</p>
         </Card>
       ) : (
         <div className="grid-2">
-          {list.map((c) => (
-            <Card key={c.channel_id}>
-              <div className="row" style={{ alignItems: 'flex-start' }}>
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <h3 className="truncate" title={c.title ?? c.channel_id}>
-                    {c.title || c.channel_id}
-                  </h3>
-                  <div className="tiny faint mono truncate">{c.url}</div>
+          {visible.map((c) => {
+            const mode = channelMode(c);
+            const scheduled = isScheduled(c);
+            const days = channelScheduleDays(c);
+            return (
+              <Card key={c.channel_id}>
+                <div className="row" style={{ alignItems: 'flex-start' }}>
+                  <input
+                    type="checkbox"
+                    className="checkbox"
+                    aria-label={`Select ${c.title ?? c.channel_id}`}
+                    checked={selected.has(c.channel_id)}
+                    onChange={() => toggleSelect(c.channel_id)}
+                    style={{ marginTop: 4 }}
+                  />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <h3 className="truncate" title={c.title ?? c.channel_id}>
+                      {c.title || c.channel_id}
+                    </h3>
+                    <div className="tiny faint mono truncate">{c.url}</div>
+                  </div>
+                  <Badge tone={c.enabled ? 'success' : 'default'} dot>
+                    {c.enabled ? 'Enabled' : 'Paused'}
+                  </Badge>
                 </div>
-                <Badge tone={c.enabled ? 'success' : 'default'} dot>
-                  {c.enabled ? 'Enabled' : 'Paused'}
-                </Badge>
-              </div>
-              <div className="row row-wrap tiny faint" style={{ marginTop: 8, gap: 10 }}>
-                <span>Last checked: {formatDateTime(c.last_checked_at)}</span>
-                <span>Last upload: {formatDateTime(c.last_uploaded_at)}</span>
-                {c.quality_override?.quality ? (
-                  <Badge tone="accent">Override: {c.quality_override.quality}</Badge>
-                ) : (
-                  <Badge>Uses global quality</Badge>
-                )}
-                {c.quality_override?.media_type ? <Badge tone="accent">{c.quality_override.media_type}</Badge> : null}
-              </div>
-              <div className="row" style={{ marginTop: 12 }}>
-                <Button size="sm" onClick={() => setEditing(c)}>
-                  Edit
-                </Button>
-                <Button size="sm" disabled={!c.enabled} onClick={() => void scan(c)} title={c.enabled ? '' : 'Channel is disabled'}>
-                  Scan now
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={() =>
-                    void api
-                      .updateChannel(c.channel_id, { enabled: !c.enabled })
-                      .then(() => {
-                        toast.success(c.enabled ? 'Channel paused.' : 'Channel enabled.');
-                        channels.refresh();
-                      })
-                      .catch((e: Error) => toast.error(e.message))
-                  }
-                >
-                  {c.enabled ? 'Pause' : 'Enable'}
-                </Button>
-                <span className="spacer" />
-                <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(c)} aria-label={`Remove ${c.title}`}>
-                  🗑
-                </Button>
-              </div>
-            </Card>
-          ))}
+                <div className="row row-wrap tiny faint" style={{ marginTop: 8, gap: 10 }}>
+                  <span>Last checked: {formatDateTime(c.last_checked_at)}</span>
+                  <span>Last upload: {formatDateTime(c.last_uploaded_at)}</span>
+                  {c.quality_override?.quality ? (
+                    <Badge tone="accent">Override: {c.quality_override.quality}</Badge>
+                  ) : (
+                    <Badge>Uses global quality</Badge>
+                  )}
+                  {c.quality_override?.media_type ? <Badge tone="accent">{c.quality_override.media_type}</Badge> : null}
+                </div>
+
+                <div className="row row-wrap" style={{ marginTop: 10, gap: 8 }}>
+                  <div className="media-toggle" role="group" aria-label={`Downloads for ${c.title ?? c.channel_id}`}>
+                    <button
+                      type="button"
+                      aria-pressed={mode === 'auto'}
+                      onClick={() => void setMode(c, 'auto')}
+                      title="Discover and download automatically"
+                    >
+                      Auto
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={mode === 'manual'}
+                      onClick={() => void setMode(c, 'manual')}
+                      title="Still discovered, never downloaded automatically"
+                    >
+                      Manual
+                    </button>
+                  </div>
+                  {scheduled ? (
+                    <Badge tone="accent" title={describePolicy(c)}>
+                      {scheduleSummary(days, c.schedule_time ?? null)}
+                    </Badge>
+                  ) : null}
+                  {/* due_now / next_due are server-computed; read them, never derive. */}
+                  {mode === 'auto' && c.due_now ? (
+                    <Badge tone="success" title="Computed by the server">
+                      Due now
+                    </Badge>
+                  ) : null}
+                  {mode === 'auto' && !c.due_now && c.next_due ? (
+                    <Badge title="Computed by the server">Next: {c.next_due}</Badge>
+                  ) : null}
+                </div>
+
+                {mode === 'manual' ? (
+                  <div className="tiny faint" style={{ marginTop: 6 }}>
+                    Uploads are still discovered and show up in the library — fetch one to download it.
+                  </div>
+                ) : null}
+
+                <div className="row" style={{ marginTop: 12 }}>
+                  <Button size="sm" onClick={() => setEditing(c)}>
+                    Edit
+                  </Button>
+                  <Button size="sm" onClick={() => setPolicyFor(c)} title="Auto/manual and download schedule">
+                    Schedule
+                  </Button>
+                  <Button size="sm" disabled={!c.enabled} onClick={() => void scan(c)} title={c.enabled ? '' : 'Channel is disabled'}>
+                    Scan now
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      void api
+                        .updateChannel(c.channel_id, { enabled: !c.enabled })
+                        .then(() => {
+                          toast.success(c.enabled ? 'Channel paused.' : 'Channel enabled.');
+                          channels.refresh();
+                        })
+                        .catch((e: Error) => toast.error(e.message))
+                    }
+                  >
+                    {c.enabled ? 'Pause' : 'Enable'}
+                  </Button>
+                  <span className="spacer" />
+                  <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(c)} aria-label={`Remove ${c.title}`}>
+                    🗑
+                  </Button>
+                </div>
+              </Card>
+            );
+          })}
         </div>
       )}
 
@@ -136,6 +331,12 @@ export function ChannelsScreen() {
           setBulkOpen(false);
           channels.refresh();
         }}
+      />
+      <ImportSubscriptionsModal
+        open={importOpen}
+        status={subStatus}
+        onClose={() => setImportOpen(false)}
+        onDone={refreshAll}
       />
       <AddChannelModal
         open={adding}
@@ -155,6 +356,25 @@ export function ChannelsScreen() {
           channels.refresh();
         }}
       />
+      <PolicyEditorModal
+        channel={policyFor}
+        onClose={() => setPolicyFor(null)}
+        onDone={() => {
+          setPolicyFor(null);
+          channels.refresh();
+        }}
+      />
+      {bulkPolicyOpen && selectedIds.length > 0 ? (
+        <BulkPolicyModal
+          channelIds={selectedIds}
+          onClose={() => setBulkPolicyOpen(false)}
+          onDone={() => {
+            setBulkPolicyOpen(false);
+            setSelected(new Set());
+            channels.refresh();
+          }}
+        />
+      ) : null}
       <Modal
         open={confirmDelete !== null}
         title="Remove channel?"

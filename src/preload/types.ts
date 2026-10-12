@@ -86,6 +86,24 @@ export interface YtmonBridge {
     getQuality(): Promise<Result<import('../shared/types').QualitySettings>>;
     setQuality(body: Partial<import('../shared/types').QualitySettings>): Promise<Result<import('../shared/types').QualitySettings>>;
     listChannels(enabled?: boolean | null): Promise<Result<import('../shared/types').Channel[]>>;
+    /** Same channels, filterable server-side with ?mode=auto|manual. */
+    listSubscriptions(mode?: import('../shared/types').ChannelMode | null): Promise<Result<import('../shared/types').Channel[]>>;
+    /** cookies_configured decides whether the "feed" import source can work. */
+    subscriptionsStatus(): Promise<Result<import('../shared/types').SubscriptionsStatus>>;
+    /**
+     * source "takeout" REQUIRES `data` (the pasted subscriptions.json) and
+     * needs nothing configured on the phone. Imported channels arrive manual.
+     */
+    importSubscriptions(body: import('../shared/types').SubscriptionImportRequest): Promise<Result<import('../shared/types').SubscriptionImportResult>>;
+    /** Re-read a stored import; this is why the channel list survives cookies. */
+    subscriptionSnapshot(id: string): Promise<Result<import('../shared/types').SubscriptionSnapshot>>;
+    /** Writes mode / schedule_* — the policy endpoint, not PATCH /channels/{id}. */
+    setChannelPolicy(
+      channelId: string,
+      body: import('../shared/types').ChannelPolicyUpdate,
+    ): Promise<Result<import('../shared/types').Channel>>;
+    /** One policy patch across many channels. */
+    bulkChannelPolicy(body: import('../shared/types').ChannelPolicyBulkRequest): Promise<Result<import('../shared/types').ChannelPolicyBulkResult>>;
     addChannel(body: {
       url: string;
       channel_id?: string;

@@ -1,7 +1,16 @@
 import { create } from 'zustand';
 import type { Result } from '../../preload/types';
 import type { YtmonBridge } from '../../preload/types';
-import type { FetchRequest, SourceCreate, SourceUpdate, TreeOrder } from '../../shared/types';
+import type {
+  FetchRequest,
+  SourceCreate,
+  SourceUpdate,
+  TreeOrder,
+  ChannelMode,
+  ChannelPolicyBulkRequest,
+  ChannelPolicyUpdate,
+  SubscriptionImportRequest,
+} from '../../shared/types';
 
 declare global {
   interface Window {
@@ -61,6 +70,13 @@ export const api = {
   getQuality: () => call(b.api.getQuality()),
   setQuality: (body: Parameters<YtmonBridge['api']['setQuality']>[0]) => call(b.api.setQuality(body)),
   listChannels: (enabled?: boolean) => call(b.api.listChannels(enabled ?? null)),
+  /** Same channels with ?mode=auto|manual filtering done by the server. */
+  listSubscriptions: (mode?: ChannelMode) => call(b.api.listSubscriptions(mode ?? null)),
+  subscriptionsStatus: () => call(b.api.subscriptionsStatus()),
+  importSubscriptions: (body: SubscriptionImportRequest) => call(b.api.importSubscriptions(body)),
+  subscriptionSnapshot: (id: string) => call(b.api.subscriptionSnapshot(id)),
+  setChannelPolicy: (id: string, body: ChannelPolicyUpdate) => call(b.api.setChannelPolicy(id, body)),
+  bulkChannelPolicy: (body: ChannelPolicyBulkRequest) => call(b.api.bulkChannelPolicy(body)),
   addChannel: (x: Parameters<YtmonBridge['api']['addChannel']>[0]) => call(b.api.addChannel(x)),
   updateChannel: (id: string, x: Parameters<YtmonBridge['api']['updateChannel']>[1]) => call(b.api.updateChannel(id, x)),
   deleteChannel: (id: string) => call(b.api.deleteChannel(id)),
@@ -148,6 +164,16 @@ export type {
   Job as JobShape,
   Channel as ChannelShape,
   MonitorScanResult as ScanResult,
+  ChannelPolicyBulkResult,
+  ChannelMode,
+  ChannelPolicyUpdate,
+  ChannelPolicyBulkRequest,
+  ScheduleDay,
+  SubscriptionImportRequest,
+  SubscriptionImportResult,
+  SubscriptionsStatus,
+  SubscriptionSnapshot,
+  SubscriptionSource,
   DeleteResult as DeleteResultShape,
   QueueStats as QueueStatsShape,
   QualitySettings as QualitySettingsShape,

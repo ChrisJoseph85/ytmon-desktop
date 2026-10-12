@@ -504,6 +504,26 @@ a {
   font-weight: 600;
 }
 
+/* Weekday chips: a standalone multi-select, not a segmented control. */
+.day-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.day-chip {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.day-chip[aria-pressed='true'] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.day-chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* ---------- progress ---------- */
 .progress {
   height: 5px;

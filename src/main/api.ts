@@ -2,6 +2,10 @@ import { YtmonError } from '../shared/errors';
 import { API_PREFIX, validateServerUrl } from '../shared/format';
 import type {
   Channel,
+  ChannelMode,
+  ChannelPolicyBulkRequest,
+  ChannelPolicyBulkResult,
+  ChannelPolicyUpdate,
   DeleteRequest,
   LibraryLayouts,
   LibrarySettings,
@@ -23,6 +27,10 @@ import type {
   SourcesStatus,
   SourceUpdate,
   SourceQualityOverride,
+  SubscriptionImportRequest,
+  SubscriptionImportResult,
+  SubscriptionsStatus,
+  SubscriptionSnapshot,
   TokenRevoked,
   ChannelImportResult,
   DeleteResult,
@@ -189,6 +197,39 @@ export class YtmonApi {
   listChannels(enabled?: boolean, signal?: AbortSignal) {
     return this.request<Channel[]>('/channels', { query: { enabled }, signal });
   }
+  /**
+   * GET /subscriptions — the same channel objects, filterable server-side.
+   * Returns channels carrying `mode` / `schedule_*` / `due_now` / `next_due`.
+   */
+  listSubscriptions(mode?: ChannelMode, signal?: AbortSignal) {
+    return this.request<Channel[]>('/subscriptions', { query: { mode }, signal });
+  }
+  /** Whether the server can read the YouTube feed at all (cookies present). */
+  subscriptionsStatus(signal?: AbortSignal) {
+    return this.request<SubscriptionsStatus>('/subscriptions/status', { signal });
+  }
+  /**
+   * POST /subscriptions/import.
+   * `source: 'takeout'` REQUIRES `data` (the pasted subscriptions.json) and
+   * needs nothing configured on the phone; `source: 'feed'` uses the server's
+   * cookies and fails with `import_failed` when they have expired.
+   * Imported channels land as mode="manual" on purpose — the server does not
+   * start downloading 300 channels because a list was pasted.
+   */
+  importSubscriptions(body: SubscriptionImportRequest, signal?: AbortSignal) {
+    const payload: SubscriptionImportRequest = { source: body.source };
+    if (body.source === 'takeout') payload.data = body.data ?? '';
+    return this.request<SubscriptionImportResult>('/subscriptions/import', {
+      method: 'POST',
+      body: payload,
+      timeoutMs: 120_000,
+      signal,
+    });
+  }
+  /** Re-read a stored import at any time; survives cookie expiry. */
+  subscriptionSnapshot(id: string, signal?: AbortSignal) {
+    return this.request<SubscriptionSnapshot>(`/subscriptions/snapshots/${encodeURIComponent(id)}`, { signal });
+  }
   addChannel(body: {
     url: string;
     channel_id?: string;
@@ -212,6 +253,22 @@ export class YtmonApi {
   }
   deleteChannel(channelId: string, signal?: AbortSignal) {
     return this.request<unknown>(`/channels/${encodeURIComponent(channelId)}`, { method: 'DELETE', signal });
+  }
+  /**
+   * PATCH /channels/{channel_id}/policy — the only endpoint that writes
+   * mode / schedule_enabled / schedule_days / schedule_time. The path takes a
+   * canonical "UC…" id or an "@handle", never the numeric row id.
+   */
+  setChannelPolicy(channelId: string, body: ChannelPolicyUpdate, signal?: AbortSignal) {
+    return this.request<Channel>(`/channels/${encodeURIComponent(channelId)}/policy`, {
+      method: 'PATCH',
+      body,
+      signal,
+    });
+  }
+  /** POST /channels/policy/bulk — one patch across many channels. */
+  bulkChannelPolicy(body: ChannelPolicyBulkRequest, signal?: AbortSignal) {
+    return this.request<ChannelPolicyBulkResult>('/channels/policy/bulk', { method: 'POST', body, signal });
   }
   scanChannel(channelId: string, signal?: AbortSignal) {
     return this.request<MonitorScanResult>(`/channels/${encodeURIComponent(channelId)}/scan`, {
@@ -537,6 +594,9 @@ export function describeScanResult(r: MonitorScanResult): string {
   ];
   if (r.duplicates > 0) bits.push(`${r.duplicates} duplicate${r.duplicates === 1 ? '' : 's'} skipped`);
   if (r.filtered > 0) bits.push(`${r.filtered} filtered`);
+  // `held` is a policy outcome, not a failure: the videos WERE discovered,
+  // they were just not downloaded because the channel is manual or not due.
+  if (r.held && r.held > 0) bits.push(`${r.held} held (manual / not due)`);
   if (r.errors.length > 0) bits.push(`${r.errors.length} error${r.errors.length === 1 ? '' : 's'}`);
   return bits.join(' · ');
 }

@@ -1,7 +1,7 @@
 import type { VideoQuery } from '@shared/types';
 
 export interface LibraryFilterInput {
-  view: 'all' | 'new' | 'unwatched' | 'watched' | 'downloading' | 'completed' | 'failed';
+  view: 'all' | 'new' | 'unwatched' | 'watched' | 'downloading' | 'completed' | 'failed' | 'discovered';
   kind: 'all' | 'video' | 'short';
   mediaType?: 'all' | 'video' | 'audio';
   search: string;
@@ -50,6 +50,10 @@ export function downloadUrlForSearch(f: LibraryFilterInput): VideoQuery {
       break;
     case 'failed':
       q.status = 'failed';
+      break;
+    case 'discovered':
+      // Manual / not-yet-due channels leave their uploads in this state.
+      q.status = 'discovered';
       break;
     case 'new':
       // Approximated with the documented filters: unwatched, newest first.

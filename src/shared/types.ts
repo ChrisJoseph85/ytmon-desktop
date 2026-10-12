@@ -104,6 +104,19 @@ export interface Job {
   completed_at: string | null;
 }
 
+/**
+ * "auto" downloads what discovery finds; "manual" still DISCOVERS uploads
+ * (they appear in the library as `discovered`) but never downloads them until
+ * the user asks. Discovery never stops either way — scheduling only gates the
+ * download.
+ */
+export const CHANNEL_MODES = ['auto', 'manual'] as const;
+export type ChannelMode = (typeof CHANNEL_MODES)[number];
+
+/** Lower-case three-letter weekdays, Monday first. */
+export const SCHEDULE_DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
+export type ScheduleDay = (typeof SCHEDULE_DAYS)[number];
+
 export interface Channel {
   id: number;
   channel_id: string;
@@ -116,10 +129,93 @@ export interface Channel {
    * child" crash, so always read `.quality` / `.media_type`.
    */
   quality_override: SourceQualityOverride | null;
+  /** Present on every channel; "auto" is the default for pre-existing rows. */
+  mode: ChannelMode;
+  /** false = downloads whenever discovery finds something. */
+  schedule_enabled: boolean;
+  /** Empty = every day. */
+  schedule_days: ScheduleDay[];
+  /** 24h local "HH:MM", or null for "any time that day". */
+  schedule_time: string | null;
+  /**
+   * SERVER-COMPUTED. Never derive it in the client: the server owns the
+   * timezone, the window and whether the next scan will actually download.
+   */
+  due_now: boolean;
+  /** Server-computed ISO timestamp of the next download window, or null. */
+  next_due: string | null;
   last_checked_at: string | null;
   last_uploaded_at: string | null;
   created_at: string | null;
   updated_at: string | null;
+}
+
+/** PATCH /channels/{channel_id}/policy — every field is optional. */
+export interface ChannelPolicyUpdate {
+  mode?: ChannelMode;
+  schedule_enabled?: boolean;
+  schedule_days?: ScheduleDay[];
+  /** null clears the time ("any time on the selected days"). */
+  schedule_time?: string | null;
+}
+
+/** POST /channels/policy/bulk — same patch, applied to many channels. */
+export interface ChannelPolicyBulkRequest extends ChannelPolicyUpdate {
+  channel_ids: string[];
+}
+
+export interface ChannelPolicyBulkResult {
+  updated: number;
+}
+
+// ---- subscriptions (import + snapshots) ---------------------------------
+
+export const SUBSCRIPTION_SOURCES = ['takeout', 'feed'] as const;
+export type SubscriptionSource = (typeof SUBSCRIPTION_SOURCES)[number];
+
+export interface SubscriptionImportRequest {
+  /** "takeout" needs `data` (the pasted subscriptions.json); "feed" does not. */
+  source: SubscriptionSource;
+  data?: string;
+}
+
+/** POST /subscriptions/import — imported channels default to mode "manual". */
+export interface SubscriptionImportResult {
+  source: SubscriptionSource;
+  imported: number;
+  updated: number;
+  skipped: number;
+  total: number;
+  errors: string[];
+}
+
+/**
+ * GET /subscriptions/status. Every field past `cookies_configured` is read
+ * defensively: the client renders the "last import" line only from what
+ * actually arrives.
+ */
+export interface SubscriptionsStatus {
+  /** Without this the "feed" source cannot work at all. */
+  cookies_configured: boolean;
+  subscriptions?: number;
+  /** A stored import; the channel list survives cookie expiry because of it. */
+  last_import_at?: string | null;
+  last_import_source?: SubscriptionSource | string | null;
+  last_import_id?: string | number | null;
+  snapshots?: number;
+  [k: string]: unknown;
+}
+
+/** GET /subscriptions/snapshots/{id} — a past import, re-read on demand. */
+export interface SubscriptionSnapshot {
+  id: string | number;
+  source: SubscriptionSource | string;
+  imported?: number;
+  updated?: number;
+  skipped?: number;
+  total?: number;
+  created_at?: string | null;
+  [k: string]: unknown;
 }
 
 export interface VideoPage {
@@ -153,6 +249,12 @@ export interface MonitorScanResult {
   queued: number;
   duplicates: number;
   filtered: number;
+  /**
+   * Discovered but NOT downloaded because the channel was manual or not due.
+   * This is NOT an error and NOT a failure: discovery never stops, only the
+   * download is gated.
+   */
+  held?: number;
   errors: string[];
 }
 
@@ -511,6 +613,12 @@ export const ERROR_CODES = {
   method_not_allowed: 'method_not_allowed',
   empty_import: 'empty_import',
   unparseable_import: 'unparseable_import',
+  data_required: 'data_required',
+  invalid_takeout: 'invalid_takeout',
+  import_failed: 'import_failed',
+  invalid_schedule_time: 'invalid_schedule_time',
+  invalid_schedule_days: 'invalid_schedule_days',
+  invalid_mode: 'invalid_mode',
   channel_disabled: 'channel_disabled',
   payload_too_large: 'payload_too_large',
   invalid_url: 'invalid_url',

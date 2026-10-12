@@ -10,7 +10,8 @@ import { registerMediaProtocol, registerMediaSchemePrivileges } from './media';
 import { fail, ok, type Result } from '../preload/types';
 import { sanitizeFilename } from '../shared/format';
 import { isQualityValue } from '../shared/quality';
-import type { SourceQualityOverride } from '../shared/types';
+import { isChannelKey, isChannelMode, isScheduleDay, normaliseDays, validateScheduleTime } from '../shared/schedule';
+import type { ChannelPolicyUpdate, SourceQualityOverride } from '../shared/types';
 
 // Dev mode is opt-in (npm run dev sets YTMON_DEV=1). Otherwise the built
 // renderer is loaded from disk, so `npm start` works without a dev server.
@@ -144,6 +145,70 @@ function validateChannelId(id: unknown): string {
   return id;
 }
 
+/** A snapshot id is an opaque server-issued token: digits, uuid or slug. */
+function validateSnapshotId(id: unknown): string {
+  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
+    throw new YtmonError('Invalid snapshot id', 'validation_error');
+  }
+  return id;
+}
+
+/**
+ * Policy paths take the channel KEY — a canonical "UC…" id or an "@handle" —
+ * never the numeric row id. A numeric id would silently address a different
+ * channel (or nothing) with no error, so it is refused here.
+ */
+function validateChannelKey(id: unknown): string {
+  if (!isChannelKey(id)) {
+    throw new YtmonError('Use the channel id (UC…) or its @handle, not the numeric row id.', 'invalid_channel');
+  }
+  return id.trim();
+}
+
+/**
+ * Whitelists the policy fields before they cross the boundary. `undefined`
+ * keys are dropped so a PATCH never clears something the user did not touch —
+ * the server treats a present key as "set this".
+ */
+function policyPatch(body: unknown): ChannelPolicyUpdate {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const patch: ChannelPolicyUpdate = {};
+  if (b.mode !== undefined) {
+    if (!isChannelMode(b.mode)) throw new YtmonError('Mode must be "auto" or "manual".', 'invalid_mode');
+    patch.mode = b.mode;
+  }
+  if (b.schedule_enabled !== undefined) {
+    if (typeof b.schedule_enabled !== 'boolean') {
+      throw new YtmonError('schedule_enabled must be true or false.', 'validation_error');
+    }
+    patch.schedule_enabled = b.schedule_enabled;
+  }
+  if (b.schedule_days !== undefined) {
+    const raw = b.schedule_days;
+    if (!Array.isArray(raw)) throw new YtmonError('schedule_days must be a list of weekdays.', 'invalid_schedule_days');
+    const days = raw.map((d) => String(d));
+    for (const d of days) {
+      if (!isScheduleDay(d)) {
+        throw new YtmonError(`"${d}" is not a weekday. Use mon..sun.`, 'invalid_schedule_days');
+      }
+    }
+    // Monday-first, de-duplicated: [] legitimately means "every day".
+    patch.schedule_days = normaliseDays(days);
+  }
+  if (b.schedule_time !== undefined) {
+    const t = b.schedule_time;
+    if (t === null) patch.schedule_time = null;
+    else {
+      const v = validateScheduleTime(String(t));
+      if (!v.ok || v.normalized === null) {
+        throw new YtmonError('schedule_time must be HH:MM (24h), or null.', 'invalid_schedule_time');
+      }
+      patch.schedule_time = v.normalized;
+    }
+  }
+  return patch;
+}
+
 function validateToken(token: unknown): string | null {
   if (token === null) return null;
   if (typeof token !== 'string' || token.length < 8 || token.length > 512 || !/^[\w.-]+$/.test(token)) {
@@ -197,6 +262,39 @@ function registerIpc(): void {
   handle('api:getQuality', () => A().getQuality());
   handle('api:listChannels', (enabled?: unknown) =>
     A().listChannels(enabled === true || enabled === false ? enabled : undefined));
+  handle('api:listSubscriptions', (mode?: unknown) =>
+    A().listSubscriptions(isChannelMode(mode) ? mode : undefined));
+  handle('api:subscriptionsStatus', () => A().subscriptionsStatus());
+  handle('api:importSubscriptions', (body: unknown) => {
+    const b = (body ?? {}) as Record<string, unknown>;
+    const source = b.source === 'feed' ? 'feed' : b.source === 'takeout' ? 'takeout' : null;
+    if (!source) throw new YtmonError('Choose a source: Takeout or feed.', 'validation_error');
+    if (source === 'feed') {
+      // The feed source reads YouTube with the phone's cookies. Checked here
+      // so the user gets the real reason instead of a bare 400 import_failed.
+      return A()
+        .subscriptionsStatus()
+        .then((status) => {
+          if (!status.cookies_configured) {
+            throw new YtmonError(
+              'The server has no YouTube cookies, so it cannot read your subscription feed.',
+              'import_failed',
+            );
+          }
+          return A().importSubscriptions({ source });
+        });
+    }
+    const data = String(b.data ?? '');
+    if (!data.trim()) {
+      throw new YtmonError('Paste the contents of your Takeout subscriptions.json first.', 'data_required');
+    }
+    // The server caps the body at 5 MB; refuse early with a readable reason.
+    if (data.length > 5_000_000) {
+      throw new YtmonError('That paste is over 5 MB. Import a shorter list.', 'payload_too_large');
+    }
+    return A().importSubscriptions({ source: 'takeout', data });
+  });
+  handle('api:subscriptionSnapshot', (id: unknown) => A().subscriptionSnapshot(validateSnapshotId(id)));
   handle('api:getMonitor', () => A().getMonitor());
   handle('api:listVideos', (q: unknown) => A().listVideos((q ?? {}) as Record<string, never>));
   handle('api:getVideo', (id: unknown, formats?: unknown) =>
@@ -219,6 +317,25 @@ function registerIpc(): void {
     A().updateChannel(validateChannelId(id), body as never));
   handle('api:deleteChannel', (id: unknown) => A().deleteChannel(validateChannelId(id)));
   handle('api:scanChannel', (id: unknown) => A().scanChannel(validateChannelId(id)));
+  // The policy fields live on their own endpoint; PATCH /channels/{id} does
+  // not write them.
+  handle('api:setChannelPolicy', (id: unknown, body: unknown) => {
+    const patch = policyPatch(body);
+    if (Object.keys(patch).length === 0) throw new YtmonError('Nothing to change.', 'validation_error');
+    return A().setChannelPolicy(validateChannelKey(id), patch);
+  });
+  handle('api:bulkChannelPolicy', (body: unknown) => {
+    const b = (body ?? {}) as Record<string, unknown>;
+    const raw = b.channel_ids;
+    if (!Array.isArray(raw) || raw.length === 0) {
+      throw new YtmonError('Select at least one channel.', 'validation_error');
+    }
+    if (raw.length > 500) throw new YtmonError('Too many channels selected (max 500).', 'payload_too_large');
+    const channelIds = [...new Set(raw.map(validateChannelKey))];
+    const patch = policyPatch(b);
+    if (Object.keys(patch).length === 0) throw new YtmonError('Nothing to change.', 'validation_error');
+    return A().bulkChannelPolicy({ ...patch, channel_ids: channelIds });
+  });
   handle('api:setMonitor', (body: unknown) => A().setMonitor(body as never));
   handle('api:scanNow', () => A().scanNow());
 

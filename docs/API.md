@@ -26,8 +26,14 @@ API version: `v1`. Expected server version: `1.0.0`.
 | GET | `/channels` | Channels screen (with `?enabled=`) |
 | POST | `/channels` | Add a channel |
 | PATCH | `/channels/{channel_id}` | Edit, enable/disable, quality override |
+| PATCH | `/channels/{channel_id}/policy` | **mode / schedule_enabled / schedule_days / schedule_time only** |
+| POST | `/channels/policy/bulk` | One policy patch across many channels |
 | DELETE | `/channels/{channel_id}` | Remove a channel |
 | POST | `/channels/{channel_id}/scan` | Scan one channel now |
+| GET | `/subscriptions` | Channels with `?mode=auto|manual` (server-side filter) |
+| GET | `/subscriptions/status` | `cookies_configured` + "last imported … from takeout" |
+| POST | `/subscriptions/import` | Import Takeout JSON (`data`) or the cookie-backed feed |
+| GET | `/subscriptions/snapshots/{id}` | Re-read a stored import at any time |
 | POST | `/monitor/check` | Resolve a URL to a channel without adding it |
 | GET | `/videos` | Library list (all documented query params) |
 | GET | `/videos/by-id/{video_id}` | Single video (with `?include_formats=1` for yt-dlp probing) |
@@ -106,14 +112,80 @@ Job:          id, video_id, channel_id, status, quality, progress, speed,
               downloaded_bytes, total_bytes, eta, attempts, next_attempt_at,
               error_message, created_at, updated_at, started_at, completed_at
 Channel:      id, channel_id, url, title, enabled, quality_override,
+              mode, schedule_enabled, schedule_days, schedule_time,
+              due_now, next_due,
               last_checked_at, last_uploaded_at, created_at, updated_at
 VideoPage:    items[], total, page, page_size
 DeleteResult: deleted, files_deleted, files_missing, errors[]
-MonitorScanResult: channels_scanned, discovered, queued, duplicates, filtered, errors[]
+MonitorScanResult: channels_scanned, discovered, queued, duplicates, filtered, held, errors[]
 ChannelImportResult: imported, updated, skipped, errors[]
+SubscriptionImportResult: source, imported, updated, skipped, total, errors[]
 FileMetadata: video_id, filename, size_bytes, mime_type, quality, quality_height,
               duration, modified_at, supports_ranges
 ```
+
+## Channel policy: auto, manual, and schedules
+
+Policy fields live on their **own** endpoint. `PATCH /channels/{id}` does not write them; the
+only writer is `PATCH /channels/{id}/policy`, with `POST /channels/policy/bulk` for many at once.
+
+```text
+PATCH /channels/{channel_id}/policy   {"mode": "auto" | "manual", "schedule_enabled": true,
+                                        "schedule_days": ["mon","wed"], "schedule_time": "08:30"}
+POST /channels/policy/bulk            {"channel_ids": [...], …same patch}  -> {"updated": N}
+```
+
+```text
+mode              "auto" | "manual"   default "auto" (pre-existing channels stay auto)
+schedule_enabled  bool                default false
+schedule_days     ["mon".."sun"]      [] means every day
+schedule_time     "HH:MM" | null      24h local; null means any time that day
+due_now           bool                SERVER-COMPUTED — read it, never derive it
+next_due          ISO timestamp|null   SERVER-COMPUTED
+```
+
+Rules this client depends on, and tests:
+
+- **manual does not stop discovery.** A manual channel's uploads are still discovered and appear
+  in the library with status `discovered`. They are not auto-downloaded; the user fetches one with
+  the normal download flow (`POST /videos/fetch {url, download:true}` or `POST /queue/enqueue`).
+- **A schedule gates the download only.** A channel scheduled for Monday still lists its Tuesday
+  upload on Tuesday.
+- **Imported channels arrive `mode="manual"` on purpose**, so importing 300 subscriptions does not
+  start 300 downloads. This client never flips them to auto on import.
+- **`due_now` / `next_due` are the server's to compute** — it owns the timezone and the window.
+- The path takes a canonical `UC…` id or an `@handle`, **never the numeric row id**.
+- `schedule_time: null` clears the time. An *absent* key must not, so the client strips
+  `undefined` before sending.
+
+### `held` on a scan is not an error
+
+`POST /monitor/scan` and `POST /channels/{id}/scan` gained `held`: videos discovered but not
+downloaded because the channel was manual or not due. The client reports it as an outcome
+("3 held for later"), never as a failure.
+
+## Subscriptions import
+
+```text
+POST /subscriptions/import  {"source": "takeout", "data": "<contents of subscriptions.json>"}
+                            {"source": "feed"}
+  -> {source, imported, updated, skipped, total, errors[]}
+GET  /subscriptions/status  -> {cookies_configured, …, last_import_at, last_import_source, …}
+GET  /subscriptions/snapshots/{id} -> a stored import, re-read at any time
+```
+
+- **Takeout is the client's default option** because it needs nothing configured on the phone.
+- The **feed** source reads YouTube with the server's cookies. The client checks
+  `GET /subscriptions/status` → `cookies_configured` *first* and, when it is false, says the server
+  needs `YTMON_COOKIES_FILE` rather than letting the user hit a raw `400 import_failed`.
+- Every import is stored server-side, which is why the channel list survives the cookies expiring.
+
+| Code | Status | Meaning |
+| --- | --- | --- |
+| `data_required` | 400 | `source=takeout` with no `data`. |
+| `invalid_takeout` | 400 | The pasted JSON is not a subscriptions array. |
+| `import_failed` | 400 | Feed import failed — almost always expired cookies. |
+| `validation_error` | 422 | Bad `mode` / `schedule_days` / `schedule_time`. |
 
 Timestamps are ISO-8601 UTC strings or `null`. `speed` is bytes/sec, `eta` is seconds, `progress` is
 0–100, `published_at` can be `null`.
@@ -173,6 +245,10 @@ Codes this client handles explicitly:
 | `invalid_path` | 400 | The server refused a path outside its media directory. |
 | `method_not_allowed` | 405 | Wrong verb for that endpoint. |
 | `empty_import` / `unparseable_import` | 400 | CSV import rejected (binary data, bare CRs, oversized fields). |
+| `data_required` | 400 | Takeout import with no `data` — the paste is required. |
+| `invalid_takeout` | 400 | The pasted JSON is not a Takeout subscriptions array. |
+| `import_failed` | 400 | Feed import failed (usually expired cookies) — use Takeout. |
+| `invalid_mode` / `invalid_schedule_days` / `invalid_schedule_time` | 422 | Rejected before sending, with the accepted form spelled out. |
 | `validation_error` | 422 | Field errors mapped onto form fields. |
 | `not_found`, `invalid_channel`, `invalid_video_id`, `invalid_quality`, `payload_too_large`, `channel_disabled`, `forbidden` | 400–409 | Message surfaced verbatim. |
 

@@ -9,7 +9,7 @@ import { downloadUrlForSearch, filterByMediaType } from '../lib/filters';
 import { qualityLabelsFrom } from '../lib/labels';
 import { formatBytes } from '@shared/format';
 
-type View = 'all' | 'new' | 'unwatched' | 'watched' | 'downloading' | 'completed' | 'failed';
+type View = 'all' | 'new' | 'unwatched' | 'watched' | 'downloading' | 'completed' | 'failed' | 'discovered';
 type Kind = 'all' | 'video' | 'short';
 
 const VIEWS: { id: View; label: string }[] = [
@@ -20,6 +20,9 @@ const VIEWS: { id: View; label: string }[] = [
   { id: 'downloading', label: 'Downloading' },
   { id: 'completed', label: 'Completed' },
   { id: 'failed', label: 'Failed' },
+  // Uploads found by discovery that were not downloaded: manual channels, or
+  // channels that are not due yet. Downloading one is a click away.
+  { id: 'discovered', label: 'Not downloaded' },
 ];
 
 export function LibraryScreen() {
@@ -235,6 +238,28 @@ export function LibraryScreen() {
       refreshAll();
     } catch (e) {
       toast.fromError(e);
+    }
+  };
+
+  /**
+   * Manual channels (and channels that are not due yet) leave their uploads in
+   * the library as `discovered` — nothing was downloaded. This is the user's
+   * way to fetch one on demand.
+   */
+  const downloadNow = async (video: VideoShape) => {
+    setBusyId(video.video_id);
+    try {
+      await api.enqueue([video.video_id]);
+      videos.setData((prev) =>
+        prev
+          ? { ...prev, items: prev.items.map((v) => (v.video_id === video.video_id ? { ...v, status: 'queued' as const } : v)) }
+          : prev!,
+      );
+      toast.success('Queued on the phone.');
+    } catch (e) {
+      toast.fromError(e);
+    } finally {
+      setBusyId(null);
     }
   };
 
@@ -516,6 +541,7 @@ export function LibraryScreen() {
               onCancelJob={(v) => void cancelJob(v)}
               onDelete={(v) => void openDelete([v])}
               onTogglePin={(v) => void togglePin(v)}
+              onDownload={(v) => void downloadNow(v)}
               busy={busyId === video.video_id}
             />
           ))}
@@ -576,6 +602,7 @@ function emptyTitle(view: View, search: string, channelId: string): string {
     downloading: 'No active downloads',
     completed: 'No completed downloads',
     failed: 'No failed downloads',
+    discovered: 'Nothing waiting to be downloaded',
   };
   return map[view];
 }

@@ -40,6 +40,12 @@ function fakeBridge(overrides: Record<string, unknown> = {}) {
       serverInfo: async () => ok({ api_version: 'v1', server_version: '1.0.0', bind_mode: 'lan', ffmpeg_path: '/usr/bin/ffmpeg' }),
       listVideos: async () => ok({ items: [], total: 0, page: 1, page_size: 24 } as VideoPage),
       listChannels: async () => ok([]),
+      listSubscriptions: async () => ok([]),
+      subscriptionsStatus: async () => ok({ cookies_configured: false }),
+      importSubscriptions: async () => ok({ source: 'takeout', imported: 0, updated: 0, skipped: 0, total: 0, errors: [] }),
+      subscriptionSnapshot: async () => ok({ id: '1', source: 'takeout' }),
+      setChannelPolicy: async () => ok({}),
+      bulkChannelPolicy: async () => ok({ updated: 0 }),
       qualityOptions: async () =>
         ok({ options: ['144p', '240p', '360p', '480p', '720p', '1080p', '1440p', '2160p', 'best'], default: '1080p', per_channel_overrides: {} }),
       getQuality: async () => ok({ quality: '1080p', prefer_mp4: true, embed_subs: false, embed_metadata: true, max_concurrent_downloads: 2 }),

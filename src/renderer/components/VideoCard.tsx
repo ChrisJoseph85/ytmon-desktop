@@ -35,6 +35,7 @@ export interface VideoCardProps {
   onCancelJob: (video: VideoShape) => void;
   onDelete: (video: VideoShape) => void;
   onTogglePin: (video: VideoShape) => void;
+  onDownload?: (video: VideoShape) => void;
   busy?: boolean;
 }
 
@@ -52,6 +53,7 @@ export const VideoCard = memo(function VideoCard({
   onCancelJob,
   onDelete,
   onTogglePin,
+  onDownload,
   busy,
 }: VideoCardProps) {
   const file = hasLocalFile(video);
@@ -139,6 +141,12 @@ export const VideoCard = memo(function VideoCard({
             <span className="clamp-2">{video.error_message}</span>
           </div>
         ) : null}
+        {/* A manual (or not-yet-due) channel leaves its uploads `discovered`:
+            they are in the library, just not downloaded. This is the one-click
+            path to fetch one. */}
+        {video.status === 'discovered' ? (
+          <div className="tiny faint">Found by discovery — not downloaded yet.</div>
+        ) : null}
         {video.status === 'unavailable' ? (
           <div className="tiny faint">
             Not available (private, removed, or restricted). Not retryable.
@@ -164,6 +172,11 @@ export const VideoCard = memo(function VideoCard({
           {video.status === 'failed' ? (
             <Button size="sm" onClick={() => onRetry(video)}>
               Retry
+            </Button>
+          ) : null}
+          {video.status === 'discovered' && onDownload ? (
+            <Button size="sm" variant="primary" disabled={busy} onClick={() => onDownload(video)} title="Download this discovered video now">
+              ⭳ Get
             </Button>
           ) : null}
           {video.status === 'queued' ? (
