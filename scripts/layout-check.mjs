@@ -286,7 +286,23 @@ server.listen(PORT, '127.0.0.1', async () => {
         if (r.result.value) return true;
         await sleep(400);
       }
-      throw new Error(`timed out waiting for ${label}`);
+      // Say what is actually on screen: "the app shell" alone hides whether
+      // this is a connection failure, a crash, or a rendering problem.
+      const seen = await cdp('Runtime.evaluate', {
+        expression: `(() => ({
+          url: location.href.slice(0, 120),
+          title: document.title,
+          text: (document.body?.innerText ?? '').replace(/\s+/g, ' ').slice(0, 300),
+          hasContent: !!document.querySelector('.content'),
+          hasNav: !!document.querySelector('.nav-item'),
+        }))()`,
+        returnByValue: true,
+      }).catch(() => null);
+      const info = seen?.result?.value;
+      throw new Error(
+        `timed out waiting for ${label}` +
+          (info ? `\n  page: ${info.url}\n  title: ${info.title}\n  nav=${info.hasNav} content=${info.hasContent}\n  text: ${info.text}` : ''),
+      );
     };
     await waitFor(`!!document.querySelector('.nav-item[data-route="settings"]')`, 'the app shell');
 
