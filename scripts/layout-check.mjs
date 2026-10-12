@@ -19,6 +19,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+// Node 20 has no global WebSocket (it is only default from Node 22), and the
+// project declares engines.node >=20, so the CDP client uses ws explicitly.
+import WebSocket from 'ws';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const PORT = 8767;
