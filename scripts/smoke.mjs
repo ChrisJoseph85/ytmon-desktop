@@ -12,6 +12,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+// Node 20 has no global WebSocket (default only from Node 22) and the project
+// declares engines.node >=20.
+import WebSocket from 'ws';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 
@@ -20,6 +23,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 // must never be pointed at the real phone. For the real server use the
 // read-only diagnostic:  npm run check-server -- http://192.168.1.100:8765 <token>
 const PORT = 8765;
+const CDP_PORT = 9200 + (process.pid % 150);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 const VIDEOS = [
@@ -101,6 +105,38 @@ const qualitySettings = {
   max_concurrent_downloads: 2,
 };
 const state = { videos: [...VIDEOS], qualitySettings, watched: 0, deletes: 0, ranges: [], requireAuth: false, channels: [CHANNEL], policies: [], imported: null };
+
+/** Ask the real renderer one question over CDP; returns its value. */
+function cdpEval(webSocketUrl, expression) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (v) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { ws.close(); } catch {}
+      resolve(v);
+    };
+    let ws;
+    try {
+      ws = new WebSocket(webSocketUrl);
+    } catch (e) {
+      finish(`connect-error: ${e.message}`);
+      return;
+    }
+    const timer = setTimeout(() => finish('timeout'), 8000);
+    ws.on('open', () => ws.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression, returnByValue: true } })));
+    ws.on('message', (data) => {
+      try {
+        const msg = JSON.parse(String(data));
+        if (msg.id === 1) finish(msg.result?.result?.value ?? `no-value: ${JSON.stringify(msg).slice(0, 120)}`);
+      } catch (e) {
+        finish(`bad-frame: ${e.message}`);
+      }
+    });
+    ws.on('error', (e) => finish(`ws-error: ${e.message}`));
+  });
+}
 
 const send = (res, code, body, headers = {}) => {
   const payload = typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body);
@@ -289,11 +325,11 @@ fs.mkdirSync(path.join(workdir, 'userData'), { recursive: true });
 fs.writeFileSync(path.join(workdir, 'userData', 'settings.json'), JSON.stringify({ serverUrl: BASE, encryptedToken: null, lastDownloadDir: workdir, maxParallelTransfers: 2, pollIntervalMs: 5000, theme: 'dark' }));
 
 server.listen(PORT, '127.0.0.1', () => {
-  const electron = spawn('npx', ['electron', '.', `--user-data-dir=${path.join(workdir, 'userData')}`, '--no-sandbox'], {
-    cwd: root,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, ELECTRON_ENABLE_LOGGING: '1' },
-  });
+  const electron = spawn(
+    'npx',
+    ['electron', '.', `--user-data-dir=${path.join(workdir, 'userData')}`, '--no-sandbox', `--remote-debugging-port=${CDP_PORT}`],
+    { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ELECTRON_ENABLE_LOGGING: '1' } },
+  );
 
   let out = '';
   electron.stdout.on('data', (d) => (out += d));
@@ -425,6 +461,36 @@ server.listen(PORT, '127.0.0.1', () => {
       checks.push(['electron window loaded the renderer', out.includes('ytmon: window ready')]);
       checks.push(['no preload failure', !out.includes('preload failed')]);
       checks.push(['renderer process stayed alive', !out.includes('renderer gone')]);
+      // `did-finish-load` also fires for chrome-error://chromewebdata/, so
+      // "window ready" alone passes even when the app never rendered — e.g.
+      // when dist/renderer is missing because the build step did not run.
+      // Assert the real UI is on screen, not merely that a window opened.
+      {
+        let rendered = false;
+        let why = 'no devtools target';
+        const deadline = Date.now() + 15000;
+        while (Date.now() < deadline) {
+          try {
+            const list = await (await fetch(`http://127.0.0.1:${CDP_PORT}/json/list`)).json();
+            const page = list.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
+            if (page) {
+              const v = await cdpEval(page.webSocketDebuggerUrl, `(() => !!document.querySelector('.nav-item'))()`);
+              if (v === true) {
+                rendered = true;
+                break;
+              }
+              why = `${v} @ ${page.url}`;
+            } else {
+              why = `targets: ${list.map((t) => t.type).join(',') || 'none'}`;
+            }
+          } catch (e) {
+            why = `fetch: ${e.message}`;
+          }
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        if (!rendered && process.env.SMOKE_VERBOSE) console.log(`  renderer check: ${why}`);
+        checks.push(['renderer actually rendered the app', rendered]);
+      }
 
       clearTimeout(timer);
       for (const [name, pass] of checks) console.log(`${pass ? 'PASS' : 'FAIL'}  ${name}`);

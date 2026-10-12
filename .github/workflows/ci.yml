@@ -33,6 +33,16 @@ jobs:
       - name: Install headless display
         run: sudo apt-get update && sudo apt-get install -y xvfb
 
+      # Both harnesses below launch the real Electron build, so they need the
+      # built app. `npm ci` only runs the postinstall build-main step, which
+      # produces dist/main and dist/preload but NOT the renderer — without
+      # this the window opens on chrome-error://chromewebdata/ and every check
+      # silently passes against an empty page.
+      - name: Build
+        run: npm run build
+
+      # Electron needs a display; xvfb gives these a headless one so the real
+      # window still has to load and stay alive.
       - name: End-to-end smoke test
         run: xvfb-run -a npm run smoke
 
@@ -41,6 +51,3 @@ jobs:
       # cannot scroll to, so settings below the fold become unreachable.
       - name: Layout / scrollability check
         run: xvfb-run -a npm run layout
-
-      - name: Build
-        run: npm run build
