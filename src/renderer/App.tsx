@@ -208,6 +208,7 @@ export function App() {
               key={n.id}
               role="tab"
               className="nav-item"
+              data-route={n.id}
               aria-current={route === n.id ? 'page' : undefined}
               aria-selected={route === n.id}
               onClick={() => setRoute(n.id)}

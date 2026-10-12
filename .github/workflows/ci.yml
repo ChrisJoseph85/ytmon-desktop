@@ -36,5 +36,11 @@ jobs:
       - name: End-to-end smoke test
         run: xvfb-run -a npm run smoke
 
+      # Catches the class of bug where a screen's content outgrows the window
+      # and `body { overflow: hidden }` clips the overflow into space the user
+      # cannot scroll to, so settings below the fold become unreachable.
+      - name: Layout / scrollability check
+        run: xvfb-run -a npm run layout
+
       - name: Build
         run: npm run build
