@@ -101,6 +101,21 @@ const server = http.createServer((req, res) => {
   if (p === '/server/info') return send(res, 200, { api_version: 'v1', server_version: '1.0.0', bind_mode: 'lan', ffmpeg_path: '/usr/bin/ffmpeg' });
   if (p === '/videos') return send(res, 200, { items: VIDEOS, total: VIDEOS.length, page: 1, page_size: 60 });
   if (p === '/channels') return send(res, 200, CHANNELS);
+  // The Channels screen lists through GET /subscriptions. Without this route
+  // it renders an empty list and the scroll check measures nothing at all —
+  // a false PASS, not a pass.
+  if (p === '/subscriptions') {
+    const mode = url.searchParams.get('mode');
+    const search = (url.searchParams.get('search') ?? '').toLowerCase();
+    let list = CHANNELS;
+    if (mode) list = list.filter((c) => c.mode === mode);
+    if (search) {
+      list = list.filter(
+        (c) => (c.title ?? '').toLowerCase().includes(search) || c.channel_id.toLowerCase().includes(search),
+      );
+    }
+    return send(res, 200, list);
+  }
   if (p === '/sources') return send(res, 200, SOURCES);
   if (p === '/subscriptions/status') return send(res, 200, { cookies_configured: false, subscriptions: CHANNELS.length });
   if (p === '/videos/pinned') return send(res, 200, []);
@@ -273,7 +288,9 @@ server.listen(PORT, '127.0.0.1', async () => {
   const cleanup = (code) => {
     try { electron.kill('SIGKILL'); } catch {}
     server.close();
-    fs.rmSync(userData, { recursive: true, force: true });
+    // Electron can still be flushing its profile as we delete, which fails
+    // with ENOTEMPTY. That must not turn a passing run into a crash.
+    try { fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch {}
     process.exit(code);
   };
 
@@ -376,6 +393,11 @@ server.listen(PORT, '127.0.0.1', async () => {
         //  2. there IS overflow but it refuses to move
         //  3. it moves but the last control is still off screen
         const problems = [];
+        // We seed every screen with far more rows than fit on screen. If the
+        // measured content does not exceed the box, the screen rendered empty
+        // or near-empty — measuring that proves nothing, so it FAILS rather
+        // than passing as "no overflow".
+        if (!overflowing) problems.push(`nothing to scroll (content=${r.scrollHeight} <= box=${r.clientHeight}) — screen likely rendered empty`);
         if (r.tallerThanWindow) problems.push('container taller than window (clipped by body)');
         if (overflowing && !r.didScroll) problems.push('overflow present but will not scroll');
         if (overflowing && r.didScroll && !r.reachedBottom) problems.push('cannot scroll to the end');
