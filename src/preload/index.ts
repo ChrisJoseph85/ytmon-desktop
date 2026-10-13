@@ -29,7 +29,7 @@ const bridge: YtmonBridge = {
     getQuality: () => invoke('api:getQuality'),
     setQuality: (body) => invoke('api:setQuality', body),
     listChannels: (enabled) => invoke('api:listChannels', enabled ?? null),
-    listSubscriptions: (mode) => invoke('api:listSubscriptions', mode ?? null),
+    listSubscriptions: (mode, search) => invoke('api:listSubscriptions', mode ?? null, String(search ?? '').slice(0, 200)),
     subscriptionsStatus: () => invoke('api:subscriptionsStatus'),
     // Cap the paste at the IPC boundary, like every other method here. Main
     // also checks, but by then the whole payload has already been copied

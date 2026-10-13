@@ -172,9 +172,9 @@ export function PolicyEditorModal({
         </Field>
 
         <Field
-          label="Time (24h, local)"
+          label="Time (24h, UTC)"
           htmlFor="policy-time"
-          hint="Optional. Leave empty for any time on the selected days."
+          hint="Optional. Leave empty for any time on the selected days. The server applies this in UTC."
           error={timeCheck.ok ? null : (timeCheck.reason ?? null)}
         >
           <input
@@ -343,9 +343,9 @@ export function BulkPolicyModal({
               </div>
             </Field>
             <Field
-              label="Time (24h, local)"
+              label="Time (24h, UTC)"
               htmlFor="bulk-policy-time"
-              hint="Optional. Leave empty for any time on the selected days."
+              hint="Optional. Leave empty for any time on the selected days. The server applies this in UTC."
               error={timeCheck.ok ? null : (timeCheck.reason ?? null)}
             >
               <input

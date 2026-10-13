@@ -87,7 +87,12 @@ export interface YtmonBridge {
     setQuality(body: Partial<import('../shared/types').QualitySettings>): Promise<Result<import('../shared/types').QualitySettings>>;
     listChannels(enabled?: boolean | null): Promise<Result<import('../shared/types').Channel[]>>;
     /** Same channels, filterable server-side with ?mode=auto|manual. */
-    listSubscriptions(mode?: import('../shared/types').ChannelMode | null): Promise<Result<import('../shared/types').Channel[]>>;
+    /**
+     * `mode` filters server-side. `search` is matched by the server with
+     * ASCII-only case folding: a Cyrillic/Greek/accented name is matched
+     * case-SENSITIVELY, so do not assume full Unicode folding client-side.
+     */
+    listSubscriptions(mode?: import('../shared/types').ChannelMode | null, search?: string | null): Promise<Result<import('../shared/types').Channel[]>>;
     /** cookies_configured decides whether the "feed" import source can work. */
     subscriptionsStatus(): Promise<Result<import('../shared/types').SubscriptionsStatus>>;
     /**

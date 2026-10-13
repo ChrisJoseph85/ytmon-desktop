@@ -135,7 +135,7 @@ export interface Channel {
   schedule_enabled: boolean;
   /** Empty = every day. */
   schedule_days: ScheduleDay[];
-  /** 24h local "HH:MM", or null for "any time that day". */
+  /** 24h "HH:MM", or null for "any time that day". Evaluated by the server in UTC. */
   schedule_time: string | null;
   /**
    * SERVER-COMPUTED. Never derive it in the client: the server owns the

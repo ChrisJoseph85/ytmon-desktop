@@ -151,7 +151,7 @@ export function SettingsScreen() {
       const r = await api.scanNow();
       // `held` is not an error: those uploads WERE discovered, they just were
       // not downloaded because their channel is manual or not due yet.
-      const held = r.held && r.held > 0 ? `, ${r.held} held until due` : '';
+      const held = r.held && r.held > 0 ? `, ${r.held} waiting for their schedule` : '';
       toast.success(
         `Scanned ${r.channels_scanned}: ${r.discovered} new, ${r.queued} queued, ${r.duplicates} duplicate${r.duplicates === 1 ? '' : 's'} skipped${held}.`,
       );

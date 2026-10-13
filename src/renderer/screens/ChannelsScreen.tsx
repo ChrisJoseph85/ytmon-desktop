@@ -17,6 +17,7 @@ import {
   describePolicy,
   filterChannels,
   isScheduled,
+  modeQueryParam,
   scheduleSummary,
   channelScheduleDays,
   type ChannelFilter,
@@ -27,7 +28,6 @@ import type { MediaType, Quality } from '@shared/types';
 const EMPTY_CHANNELS: ChannelShape[] = [];
 
 export function ChannelsScreen() {
-  const channels = usePolling(() => api.listChannels(), 25_000);
   const [options, setOptions] = useState<{ value: string; label: string }[]>([]);
   const [editing, setEditing] = useState<ChannelShape | null>(null);
   const [policyFor, setPolicyFor] = useState<ChannelShape | null>(null);
@@ -37,8 +37,32 @@ export function ChannelsScreen() {
   const [importOpen, setImportOpen] = useState(false);
   const [subStatus, setSubStatus] = useState<SubscriptionsStatus | null>(null);
   const [filter, setFilter] = useState<ChannelFilter>('all');
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkPolicyOpen, setBulkPolicyOpen] = useState(false);
+  const [downloading, setDownloading] = useState<string | null>(null);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 280);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  // Unfiltered, so the pill counts stay honest under any active filter.
+  const totals = usePolling(() => api.listChannels(), 60_000);
+
+  // "Scheduled" has no server-side filter, so that one view is local; every
+  // other combination is asked of the server so it does not have to ship
+  // the whole list just to filter 300 channels in the renderer.
+  const modeParam = modeQueryParam(filter);
+  const channels = usePolling(
+    () =>
+      filter === 'scheduled'
+        ? api.listChannels()
+        : api.listSubscriptions(modeParam, debouncedSearch || undefined),
+    25_000,
+    [filter, debouncedSearch],
+  );
 
   useEffect(() => {
     void api
@@ -54,7 +78,7 @@ export function ChannelsScreen() {
       const parts = [`${r.discovered} new`, `${r.queued} queued`, `${r.duplicates} duplicates skipped`];
       // `held` is an outcome, not a failure: the uploads WERE discovered, they
       // just were not downloaded because the channel is manual or not due.
-      if (r.held && r.held > 0) parts.push(`${r.held} held for later`);
+      if (r.held && r.held > 0) parts.push(`${r.held} waiting for its schedule`);
       // discovered 0 + a big filtered count almost always means the server's
       // publication window is narrower than the channel's upload cadence.
       if (r.discovered === 0 && r.filtered > 0) {
@@ -74,6 +98,22 @@ export function ChannelsScreen() {
     }
   };
 
+  /** Fetches the channel on demand via the documented /videos/fetch flow. */
+  const downloadChannel = async (c: ChannelShape) => {
+    setDownloading(c.channel_id);
+    try {
+      const r = await api.fetchLink({ url: c.url, download: true });
+      toast.success(
+        `${c.title || c.channel_id}: ${r.added.length} added, ${r.queued.length} queued, ${r.unavailable.length} unavailable.`,
+      );
+      channels.refresh();
+    } catch (e) {
+      toast.fromError(e);
+    } finally {
+      setDownloading(null);
+    }
+  };
+
   const setMode = async (c: ChannelShape, mode: 'auto' | 'manual') => {
     try {
       await api.setChannelPolicy(c.channel_id, { mode });
@@ -89,16 +129,20 @@ export function ChannelsScreen() {
   };
 
   const list = channels.data ?? EMPTY_CHANNELS;
-  const visible = useMemo(() => filterChannels(list, filter), [list, filter]);
-  const counts = useMemo(
-    () => ({
-      all: list.length,
-      auto: list.filter((c) => channelMode(c) === 'auto').length,
-      manual: list.filter((c) => channelMode(c) === 'manual').length,
-      scheduled: list.filter((c) => isScheduled(c)).length,
-    }),
-    [list],
-  );
+  // Only the "Scheduled" view is filtered locally; the rest arrive already
+  // filtered, so `list` is the visible set.
+  const visible = filter === 'scheduled' ? filterChannels(list, filter) : list;
+  // Counts come from an unfiltered read, otherwise every pill except the
+  // active one would read 0 the moment a server-side filter is applied.
+  const counts = useMemo(() => {
+    const all = totals.data ?? EMPTY_CHANNELS;
+    return {
+      all: all.length,
+      auto: all.filter((c) => channelMode(c) === 'auto').length,
+      manual: all.filter((c) => channelMode(c) === 'manual').length,
+      scheduled: all.filter((c) => isScheduled(c)).length,
+    };
+  }, [totals.data]);
 
   const selectedIds = useMemo(() => [...selected].filter((id) => list.some((c) => c.channel_id === id)), [selected, list]);
 
@@ -137,6 +181,14 @@ export function ChannelsScreen() {
       </div>
 
       <div className="row row-wrap" style={{ gap: 10 }}>
+        <input
+          className="input"
+          style={{ maxWidth: 220 }}
+          placeholder="Search channels"
+          aria-label="Search channels"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
         <PillGroup
           value={filter}
           ariaLabel="Filter channels"
@@ -290,6 +342,14 @@ export function ChannelsScreen() {
                 ) : null}
 
                 <div className="row" style={{ marginTop: 12 }}>
+                  <Button
+                    size="sm"
+                    onClick={() => void downloadChannel(c)}
+                    loading={downloading === c.channel_id}
+                    title="Discover and download this channel's uploads now"
+                  >
+                    Download now
+                  </Button>
                   <Button size="sm" onClick={() => setEditing(c)}>
                     Edit
                   </Button>

@@ -268,13 +268,16 @@ function registerIpc(): void {
   handle('api:getQuality', () => A().getQuality());
   handle('api:listChannels', (enabled?: unknown) =>
     A().listChannels(enabled === true || enabled === false ? enabled : undefined));
-  handle('api:listSubscriptions', (mode?: unknown) => {
+  handle('api:listSubscriptions', (mode?: unknown, search?: unknown) => {
     // Dropping a bad mode to "no filter" would silently return ALL channels,
     // which reads as "the filter is broken". Say what was wrong instead.
     if (mode !== null && mode !== undefined && !isChannelMode(mode)) {
       throw new YtmonError('mode must be "auto" or "manual".', 'invalid_mode');
     }
-    return A().listSubscriptions(isChannelMode(mode) ? mode : undefined);
+    // The server folds ASCII case-insensitively only, so pass the term
+    // through untouched rather than "helpfully" lowercasing it here.
+    const q = String(search ?? '').trim().slice(0, 200);
+    return A().listSubscriptions(isChannelMode(mode) ? mode : undefined, q || undefined);
   });
   handle('api:subscriptionsStatus', () => A().subscriptionsStatus());
   handle('api:importSubscriptions', (body: unknown) => {

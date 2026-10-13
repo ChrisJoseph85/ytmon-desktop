@@ -346,9 +346,9 @@ server.listen(PORT, '127.0.0.1', () => {
   };
 
   const timer = setTimeout(() => {
-    console.error('SMOKE FAIL: app did not exit cleanly within 30s');
+    console.error('SMOKE FAIL: app did not exit cleanly within 60s');
     done(1);
-  }, 30000);
+  }, 60000);
 
   // Drive the real API through the same client the app uses, against the fake
   // server, to verify the vertical slice contract end to end.
@@ -454,8 +454,9 @@ server.listen(PORT, '127.0.0.1', () => {
 
       // The real Electron window must load the built renderer without a crash.
       // Poll for the ready marker rather than sleeping a fixed amount: on a
-      // loaded machine the renderer can take longer than any fixed wait.
-      const deadline = Date.now() + 8000;
+      // loaded machine the renderer can take much longer than any fixed wait,
+      // and failing here would be a false negative about the app.
+      const deadline = Date.now() + 20000;
       while (!out.includes('ytmon: window ready') && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 200));
       }

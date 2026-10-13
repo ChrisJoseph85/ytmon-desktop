@@ -201,8 +201,8 @@ export class YtmonApi {
    * GET /subscriptions — the same channel objects, filterable server-side.
    * Returns channels carrying `mode` / `schedule_*` / `due_now` / `next_due`.
    */
-  listSubscriptions(mode?: ChannelMode, signal?: AbortSignal) {
-    return this.request<Channel[]>('/subscriptions', { query: { mode }, signal });
+  listSubscriptions(mode?: ChannelMode, search?: string, signal?: AbortSignal) {
+    return this.request<Channel[]>('/subscriptions', { query: { mode, search }, signal });
   }
   /** Whether the server can read the YouTube feed at all (cookies present). */
   subscriptionsStatus(signal?: AbortSignal) {
@@ -596,7 +596,7 @@ export function describeScanResult(r: MonitorScanResult): string {
   if (r.filtered > 0) bits.push(`${r.filtered} filtered`);
   // `held` is a policy outcome, not a failure: the videos WERE discovered,
   // they were just not downloaded because the channel is manual or not due.
-  if (r.held && r.held > 0) bits.push(`${r.held} held (manual / not due)`);
+  if (r.held && r.held > 0) bits.push(`${r.held} waiting for its schedule (manual / not due)`);
   // Tolerate a payload with no errors[] rather than crashing the screen that
   // renders it; the scan toast is not worth taking the app down for.
   const errors = r.errors ?? [];

@@ -30,7 +30,7 @@ API version: `v1`. Expected server version: `1.0.0`.
 | POST | `/channels/policy/bulk` | One policy patch across many channels |
 | DELETE | `/channels/{channel_id}` | Remove a channel |
 | POST | `/channels/{channel_id}/scan` | Scan one channel now |
-| GET | `/subscriptions` | Channels with `?mode=auto|manual` (server-side filter) |
+| GET | `/subscriptions` | Channels with `?mode=auto|manual` and `?search=` (both server-side) |
 | GET | `/subscriptions/status` | `cookies_configured` + "last imported … from takeout" |
 | POST | `/subscriptions/import` | Import Takeout JSON (`data`) or the cookie-backed feed |
 | GET | `/subscriptions/snapshots/{id}` | Re-read a stored import at any time |
@@ -139,7 +139,8 @@ POST /channels/policy/bulk            {"channel_ids": [...], …same patch}  -> 
 mode              "auto" | "manual"   default "auto" (pre-existing channels stay auto)
 schedule_enabled  bool                default false
 schedule_days     ["mon".."sun"]      [] means every day
-schedule_time     "HH:MM" | null      24h local; null means any time that day
+schedule_time     "HH:MM" | null      24h, evaluated by the SERVER in UTC (not
+                                   device-local); null means any time that day
 due_now           bool                SERVER-COMPUTED — read it, never derive it
 next_due          ISO timestamp|null   SERVER-COMPUTED
 ```
@@ -162,7 +163,7 @@ Rules this client depends on, and tests:
 
 `POST /monitor/scan` and `POST /channels/{id}/scan` gained `held`: videos discovered but not
 downloaded because the channel was manual or not due. The client reports it as an outcome
-("3 held for later"), never as a failure.
+("3 waiting for its schedule"), never as a failure.
 
 ## Subscriptions import
 
@@ -175,6 +176,9 @@ GET  /subscriptions/snapshots/{id} -> a stored import, re-read at any time
 ```
 
 - **Takeout is the client's default option** because it needs nothing configured on the phone.
+- `GET /subscriptions?search=` folds ASCII case-insensitively only. A Cyrillic/Greek/accented
+  name is therefore matched **case-sensitively**; the client passes the term through untouched
+  rather than normalising it and changing which channels match.
 - The **feed** source reads YouTube with the server's cookies. The client checks
   `GET /subscriptions/status` → `cookies_configured` *first* and, when it is false, says the server
   needs `YTMON_COOKIES_FILE` rather than letting the user hit a raw `400 import_failed`.

@@ -264,7 +264,7 @@ describe('scan `held` is not an error', () => {
       held: 3,
       errors: [],
     });
-    expect(text).toContain('3 held');
+    expect(text).toContain('3 waiting for its schedule');
     expect(text).toContain('not due');
     expect(text).not.toMatch(/error/i);
   });
@@ -295,6 +295,6 @@ describe('scan results without an errors array', () => {
       channels_scanned: 2, discovered: 3, queued: 1, duplicates: 0, filtered: 0, held: 2,
     } as unknown as MonitorScanResult;
     expect(() => describeScanResult(payload)).not.toThrow();
-    expect(describeScanResult(payload)).toContain('2 held');
+    expect(describeScanResult(payload)).toContain('2 waiting for its schedule');
   });
 });

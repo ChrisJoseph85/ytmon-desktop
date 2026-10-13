@@ -45,20 +45,33 @@ type Bridge = Record<string, unknown>;
 function fakeBridge(over: Bridge = {}): Bridge {
   const api = {
     listChannels: async () => ok([channel()]),
-    listSubscriptions: async () => ok([]),
+    // Declared below: it has to follow whatever listChannels ends up being,
+    // including a test's override.
+    listSubscriptions: undefined as unknown as (mode?: string) => Promise<unknown>,
     subscriptionsStatus: async () => ok({ cookies_configured: false, subscriptions: 3 }),
     importSubscriptions: async (): Promise<Result<SubscriptionImportResult>> =>
       ok({ source: 'takeout', imported: 300, updated: 0, skipped: 2, total: 302, errors: [] }),
     setChannelPolicy: async () => ok(channel()),
     bulkChannelPolicy: async () => ok({ updated: 2 }),
     qualityOptions: async () => ok({ options: ['480p', '1080p'], default: '1080p', per_channel_overrides: {} }),
+    fetchLink: async () => ok({ kind: 'channel', resolved: 0, added: [], queued: [], duplicates: [], unavailable: [], truncated: false, quality: null, media_type: 'video' }),
     scanChannel: async () => ok({ channels_scanned: 1, discovered: 2, queued: 0, duplicates: 0, filtered: 0, held: 2, errors: [] }),
     updateChannel: async () => ok(channel()),
     deleteChannel: async () => ok(true),
     ...over,
   };
+  const merged = { ...api, ...over } as Record<string, unknown>;
+  // The screen lists channels through GET /subscriptions; the real server
+  // filters that by mode, so the fake follows listChannels (including any
+  // override a test supplies) rather than stubbing a fixed empty list.
+  if (typeof over.listSubscriptions !== 'function') {
+    merged.listSubscriptions = async (mode?: string) => {
+      const res = (await (merged.listChannels as () => Promise<{ data: Channel[] }>)()) as { data: Channel[] };
+      return ok(res.data.filter((c) => !mode || c.mode === mode));
+    };
+  }
   return {
-    api,
+    api: merged,
     settings: { get: async () => ok({}), setPreferences: async () => ok({}) },
     files: {},
     app: {},
@@ -155,7 +168,7 @@ describe('channels screen — schedule editor', () => {
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Mon' }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Fri' }));
-    fireEvent.change(within(dialog).getByLabelText(/time \(24h, local\)/i), { target: { value: '08:30' } });
+    fireEvent.change(within(dialog).getByLabelText(/Time \(24h, UTC\)/i), { target: { value: '08:30' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(setChannelPolicy).toHaveBeenCalled());
@@ -176,7 +189,7 @@ describe('channels screen — schedule editor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
 
     const dialog = await screen.findByRole('dialog');
-    fireEvent.change(within(dialog).getByLabelText(/time \(24h, local\)/i), { target: { value: '25:00' } });
+    fireEvent.change(within(dialog).getByLabelText(/Time \(24h, UTC\)/i), { target: { value: '25:00' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
 
     // The field-level error and the modal alert both carry the reason.
@@ -342,7 +355,7 @@ describe('scan result `held`', () => {
     );
     await screen.findByText('Lofi Channel');
     fireEvent.click(screen.getByRole('button', { name: /scan now/i }));
-    const toast = await screen.findByText(/2 held for later/i);
+    const toast = await screen.findByText(/2 waiting for its schedule/i);
     expect(toast.textContent).not.toMatch(/error|failed/i);
     expect(toast.textContent).toMatch(/nothing downloaded/i);
   });
@@ -378,7 +391,7 @@ describe('bulk policy modal — regressions', () => {
     const { dialog, listChannels } = await openBulk();
     fireEvent.click(within(dialog).getByRole('switch', { name: /Set a download schedule/i }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Mon' }));
-    fireEvent.change(within(dialog).getByLabelText(/Time \(24h, local\)/i), { target: { value: '08:30' } });
+    fireEvent.change(within(dialog).getByLabelText(/Time \(24h, UTC\)/i), { target: { value: '08:30' } });
 
     // Same selection, new array identity — exactly what a poll produces.
     const before = listChannels.mock.calls.length;
@@ -388,8 +401,8 @@ describe('bulk policy modal — regressions', () => {
     // meant to catch.
     await waitFor(() => expect(listChannels.mock.calls.length).toBeGreaterThan(before));
     // The section must still be there, with the user's values intact.
-    await waitFor(() => expect(within(dialog).getByLabelText(/Time \(24h, local\)/i)).toBeTruthy());
-    expect((within(dialog).getByLabelText(/Time \(24h, local\)/i) as HTMLInputElement).value).toBe('08:30');
+    await waitFor(() => expect(within(dialog).getByLabelText(/Time \(24h, UTC\)/i)).toBeTruthy());
+    expect((within(dialog).getByLabelText(/Time \(24h, UTC\)/i) as HTMLInputElement).value).toBe('08:30');
     expect(within(dialog).getByRole('button', { name: 'Mon' }).getAttribute('aria-pressed')).toBe('true');
     expect(within(dialog).getByRole('switch', { name: /Set a download schedule/i }).getAttribute('aria-checked')).toBe('true');
   });
@@ -400,7 +413,7 @@ describe('bulk policy modal — regressions', () => {
     const { bulkChannelPolicy, dialog } = await openBulk();
     fireEvent.click(within(dialog).getByRole('switch', { name: /Set a download schedule/i }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Mon' }));
-    fireEvent.change(within(dialog).getByLabelText(/Time \(24h, local\)/i), { target: { value: '25:00' } });
+    fireEvent.change(within(dialog).getByLabelText(/Time \(24h, UTC\)/i), { target: { value: '25:00' } });
     fireEvent.click(within(dialog).getByRole('button', { name: /^Apply to/ }));
 
     await waitFor(() => expect(within(dialog).getAllByText(/24-hour HH:MM/i).length).toBeGreaterThan(1));
@@ -428,5 +441,61 @@ describe('single-channel policy modal — regressions', () => {
 
     await waitFor(() => expect(setChannelPolicy).toHaveBeenCalled());
     expect(setChannelPolicy.mock.calls[0]![1]).not.toHaveProperty('schedule_enabled');
+  });
+});
+
+describe('schedule time is evaluated in UTC, not device-local', () => {
+  it('labels the field UTC so nobody reads it as their own clock', async () => {
+    install(fakeBridge());
+    render(<ChannelsScreen />);
+    await screen.findByText('Lofi Channel');
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+    const dialog = await screen.findByRole('dialog');
+    // The server applies schedule_time in UTC. Calling it "local" would make
+    // a user set 08:30 meaning their morning and get 08:30 UTC instead.
+    expect(within(dialog).getByLabelText(/Time \(24h, UTC\)/i)).toBeTruthy();
+    expect(dialog.textContent).not.toMatch(/24h, local/i);
+    expect(dialog.textContent).toMatch(/UTC/);
+  });
+});
+
+describe('channel search hits the server', () => {
+  it('passes ?search= through and renders the filtered result', async () => {
+    const listSubscriptions = vi.fn(async (_mode: unknown, search?: string) =>
+      ok(search ? [] : [channel(), channel({ id: 2, channel_id: '@m', title: 'Manual One', mode: 'manual' })]),
+    );
+    install(fakeBridge({ listSubscriptions }));
+    render(<ChannelsScreen />);
+    await screen.findByText('Lofi Channel');
+
+    fireEvent.change(screen.getByLabelText('Search channels'), { target: { value: 'lofi' } });
+    await waitFor(() => expect(listSubscriptions.mock.calls.some((c) => c[1] === 'lofi')).toBe(true));
+    // Server returned nothing for that term.
+    await waitFor(() => expect(screen.queryByText('Lofi Channel')).toBeNull());
+  });
+
+  it('does not lowercase the term — the server folds ASCII only', async () => {
+    const listSubscriptions = vi.fn(async (_mode?: unknown, _search?: string) => ok([channel()]));
+    install(fakeBridge({ listSubscriptions }));
+    render(<ChannelsScreen />);
+    await screen.findByText('Lofi Channel');
+    fireEvent.change(screen.getByLabelText('Search channels'), { target: { value: 'ЁЖик' } });
+    // Cyrillic is matched case-SENSITIVELY server-side, so mutating the term
+    // client-side would quietly change which channels match.
+    await waitFor(() => expect(listSubscriptions.mock.calls.some((c) => c[1] === 'ЁЖик')).toBe(true));
+  });
+});
+
+describe('channel row actions', () => {
+  it('Download now goes through POST /videos/fetch with download:true', async () => {
+    const fetchLink = vi.fn(async (_body: { url: string; download: boolean }) =>
+      ok({ kind: 'channel', resolved: 3, added: ['a'], queued: ['b'], duplicates: [], unavailable: ['c'], truncated: false, quality: null, media_type: 'video' }),
+    );
+    install(fakeBridge({ fetchLink }));
+    render(<ChannelsScreen />);
+    await screen.findByText('Lofi Channel');
+    fireEvent.click(screen.getByRole('button', { name: 'Download now' }));
+    await waitFor(() => expect(fetchLink).toHaveBeenCalled());
+    expect(fetchLink.mock.calls[0]![0]).toMatchObject({ url: `https://www.youtube.com/channel/${UC}`, download: true });
   });
 });
