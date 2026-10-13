@@ -1,5 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { Result, YtmonBridge } from './types';
+import { fail } from './types';
+
+/** Server caps request bodies at 5 MB; keep the same ceiling in the bridge. */
+const MAX_IMPORT_BYTES = 5_000_000;
 
 const invoke = <T>(channel: string, ...args: unknown[]): Promise<Result<T>> =>
   ipcRenderer.invoke(channel, ...args) as Promise<Result<T>>;
@@ -27,7 +31,21 @@ const bridge: YtmonBridge = {
     listChannels: (enabled) => invoke('api:listChannels', enabled ?? null),
     listSubscriptions: (mode) => invoke('api:listSubscriptions', mode ?? null),
     subscriptionsStatus: () => invoke('api:subscriptionsStatus'),
-    importSubscriptions: (body) => invoke('api:importSubscriptions', body),
+    // Cap the paste at the IPC boundary, like every other method here. Main
+    // also checks, but by then the whole payload has already been copied
+    // across; this is what stops an accidental 100 MB paste from doing that.
+    importSubscriptions: (body) => {
+      const b = (body ?? {}) as { source?: string; data?: unknown };
+      const data = typeof b.data === 'string' ? b.data : '';
+      if (data.length > MAX_IMPORT_BYTES) {
+        return Promise.resolve(fail({
+          message: 'That paste is too large to send.',
+          code: 'payload_too_large',
+          hint: 'The server accepts up to 5 MB. Import a shorter subscriptions.json.',
+        }));
+      }
+      return invoke('api:importSubscriptions', b.source === 'feed' ? { source: 'feed' } : { source: 'takeout', data });
+    },
     subscriptionSnapshot: (id) => invoke('api:subscriptionSnapshot', String(id ?? '').slice(0, 64)),
     setChannelPolicy: (channelId, body) => invoke('api:setChannelPolicy', channelId, body ?? {}),
     bulkChannelPolicy: (body) => invoke('api:bulkChannelPolicy', body),

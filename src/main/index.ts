@@ -186,20 +186,26 @@ function policyPatch(body: unknown): ChannelPolicyUpdate {
   if (b.schedule_days !== undefined) {
     const raw = b.schedule_days;
     if (!Array.isArray(raw)) throw new YtmonError('schedule_days must be a list of weekdays.', 'invalid_schedule_days');
-    const days = raw.map((d) => String(d));
-    for (const d of days) {
-      if (!isScheduleDay(d)) {
-        throw new YtmonError(`"${d}" is not a weekday. Use mon..sun.`, 'invalid_schedule_days');
+    // Seven unique days is the whole domain; a huge array here is a bug or an
+    // attack, and normaliseDays would walk all of it before collapsing to 7.
+    if (raw.length > 7) {
+      throw new YtmonError('schedule_days accepts at most the 7 weekdays.', 'invalid_schedule_days');
+    }
+    for (const d of raw) {
+      if (typeof d !== 'string' || !isScheduleDay(d)) {
+        throw new YtmonError(`"${String(d)}" is not a weekday. Use mon..sun.`, 'invalid_schedule_days');
       }
     }
     // Monday-first, de-duplicated: [] legitimately means "every day".
-    patch.schedule_days = normaliseDays(days);
+    patch.schedule_days = normaliseDays(raw);
   }
   if (b.schedule_time !== undefined) {
     const t = b.schedule_time;
     if (t === null) patch.schedule_time = null;
-    else {
-      const v = validateScheduleTime(String(t));
+    else if (typeof t !== 'string') {
+      throw new YtmonError('schedule_time must be HH:MM (24h), or null.', 'invalid_schedule_time');
+    } else {
+      const v = validateScheduleTime(t);
       if (!v.ok || v.normalized === null) {
         throw new YtmonError('schedule_time must be HH:MM (24h), or null.', 'invalid_schedule_time');
       }
@@ -262,8 +268,14 @@ function registerIpc(): void {
   handle('api:getQuality', () => A().getQuality());
   handle('api:listChannels', (enabled?: unknown) =>
     A().listChannels(enabled === true || enabled === false ? enabled : undefined));
-  handle('api:listSubscriptions', (mode?: unknown) =>
-    A().listSubscriptions(isChannelMode(mode) ? mode : undefined));
+  handle('api:listSubscriptions', (mode?: unknown) => {
+    // Dropping a bad mode to "no filter" would silently return ALL channels,
+    // which reads as "the filter is broken". Say what was wrong instead.
+    if (mode !== null && mode !== undefined && !isChannelMode(mode)) {
+      throw new YtmonError('mode must be "auto" or "manual".', 'invalid_mode');
+    }
+    return A().listSubscriptions(isChannelMode(mode) ? mode : undefined);
+  });
   handle('api:subscriptionsStatus', () => A().subscriptionsStatus());
   handle('api:importSubscriptions', (body: unknown) => {
     const b = (body ?? {}) as Record<string, unknown>;
@@ -284,12 +296,19 @@ function registerIpc(): void {
           return A().importSubscriptions({ source });
         });
     }
+    // Only a string may be pasted. Coercing with String() would turn a number
+    // or object into "12345"/"[object Object]" and forward that to the server,
+    // which answers 400 invalid_takeout — a far worse error than a local one.
+    if (b.data !== undefined && typeof b.data !== 'string') {
+      throw new YtmonError('Paste the raw text of subscriptions.json.', 'invalid_takeout');
+    }
     const data = String(b.data ?? '');
     if (!data.trim()) {
       throw new YtmonError('Paste the contents of your Takeout subscriptions.json first.', 'data_required');
     }
     // The server caps the body at 5 MB; refuse early with a readable reason.
-    if (data.length > 5_000_000) {
+    // Measured in bytes, because that is what the server counts.
+    if (Buffer.byteLength(data, 'utf8') > 5_000_000) {
       throw new YtmonError('That paste is over 5 MB. Import a shorter list.', 'payload_too_large');
     }
     return A().importSubscriptions({ source: 'takeout', data });

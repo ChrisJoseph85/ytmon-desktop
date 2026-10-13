@@ -185,7 +185,8 @@ GET  /subscriptions/snapshots/{id} -> a stored import, re-read at any time
 | `data_required` | 400 | `source=takeout` with no `data`. |
 | `invalid_takeout` | 400 | The pasted JSON is not a subscriptions array. |
 | `import_failed` | 400 | Feed import failed — almost always expired cookies. |
-| `validation_error` | 422 | Bad `mode` / `schedule_days` / `schedule_time`. |
+| `invalid_mode` / `invalid_schedule_days` / `invalid_schedule_time` | 422 | Rejected in the main process before any request is sent, with the accepted form spelled out. |
+| `validation_error` | 422 | Also used for an empty policy patch ("Nothing to change") and an empty selection. Field errors from the server are mapped onto form fields. |
 
 Timestamps are ISO-8601 UTC strings or `null`. `speed` is bytes/sec, `eta` is seconds, `progress` is
 0–100, `published_at` can be `null`.
@@ -246,10 +247,10 @@ Codes this client handles explicitly:
 | `method_not_allowed` | 405 | Wrong verb for that endpoint. |
 | `empty_import` / `unparseable_import` | 400 | CSV import rejected (binary data, bare CRs, oversized fields). |
 | `data_required` | 400 | Takeout import with no `data` — the paste is required. |
-| `invalid_takeout` | 400 | The pasted JSON is not a Takeout subscriptions array. |
+| `invalid_takeout` | 400 | The pasted JSON is not a Takeout subscriptions array. Raised by the **server**; the client also raises it locally when `data` is not a string. |
 | `import_failed` | 400 | Feed import failed (usually expired cookies) — use Takeout. |
-| `invalid_mode` / `invalid_schedule_days` / `invalid_schedule_time` | 422 | Rejected before sending, with the accepted form spelled out. |
-| `validation_error` | 422 | Field errors mapped onto form fields. |
+| `invalid_mode` / `invalid_schedule_days` / `invalid_schedule_time` | 422 | Raised **client-side** in the main process before any request is sent, with the accepted form spelled out. |
+| `validation_error` | 422 | Empty policy patch, empty selection, or server field errors mapped onto form fields. |
 | `not_found`, `invalid_channel`, `invalid_video_id`, `invalid_quality`, `payload_too_large`, `channel_disabled`, `forbidden` | 400–409 | Message surfaced verbatim. |
 
 The client always surfaces `error.message` plus a short actionable hint derived from the code.

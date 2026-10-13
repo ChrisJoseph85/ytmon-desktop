@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Alert, Badge, Button, Field, Modal, Select } from './ui';
-import { api, toast, type SubscriptionImportResult, type SubscriptionSource, type SubscriptionsStatus } from '../lib/bridge';
+import { api, describeError, toast, type SubscriptionImportResult, type SubscriptionSource, type SubscriptionsStatus } from '../lib/bridge';
 import { formatDateTime } from '@shared/format';
 
 /**
@@ -53,7 +53,11 @@ export function ImportSubscriptionsModal({
       toast.success(`Imported ${res.imported} channel${res.imported === 1 ? '' : 's'} from ${res.source}.`);
       onDone();
     } catch (e) {
-      setError((e as Error).message);
+      // Keep the server's message AND our hint: `data_required`,
+      // `invalid_takeout` and `import_failed` all carry the actionable next
+      // step, and dropping it leaves the user staring at a raw 400.
+      const d = describeError(e);
+      setError(d.hint ? `${d.message} ${d.hint}` : d.message);
     } finally {
       setBusy(false);
     }

@@ -347,3 +347,86 @@ describe('scan result `held`', () => {
     expect(toast.textContent).toMatch(/nothing downloaded/i);
   });
 });
+/**
+ * Regressions found by review. Each failed before the fix; the first one
+ * silently destroyed whatever the user had typed.
+ */
+describe('bulk policy modal — regressions', () => {
+  const openBulk = async () => {
+    const bulkChannelPolicy = vi.fn(async () => ok({ updated: 2 }));
+    const listChannels = vi.fn(async () =>
+      ok([channel({ channel_id: UC }), channel({ id: 2, channel_id: '@other', title: 'Other' })]),
+    );
+    install(fakeBridge({ bulkChannelPolicy, listChannels }));
+    render(
+      <>
+        <ChannelsScreen />
+        <Toasts />
+      </>,
+    );
+    await screen.findByText('Lofi Channel');
+    fireEvent.click(screen.getByLabelText('Select Lofi Channel'));
+    fireEvent.click(screen.getByLabelText('Select Other'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Set schedule…' }));
+    return { bulkChannelPolicy, listChannels, dialog: await screen.findByRole('dialog') };
+  };
+
+  it('keeps in-progress input when the screen polls in the background', async () => {
+    // The channels list is replaced by a 25s background poll. ChannelsScreen
+    // rebuilds the selected-id array each time, which used to re-run the
+    // modal's reset effect and wipe the form roughly every 25 seconds.
+    const { dialog, listChannels } = await openBulk();
+    fireEvent.click(within(dialog).getByRole('switch', { name: /Set a download schedule/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Mon' }));
+    fireEvent.change(within(dialog).getByLabelText(/Time \(24h, local\)/i), { target: { value: '08:30' } });
+
+    // Same selection, new array identity — exactly what a poll produces.
+    const before = listChannels.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    // Wait for the refetch to actually land. Without this the assertion runs
+    // before the async poll resolves and passes against the very bug it is
+    // meant to catch.
+    await waitFor(() => expect(listChannels.mock.calls.length).toBeGreaterThan(before));
+    // The section must still be there, with the user's values intact.
+    await waitFor(() => expect(within(dialog).getByLabelText(/Time \(24h, local\)/i)).toBeTruthy());
+    expect((within(dialog).getByLabelText(/Time \(24h, local\)/i) as HTMLInputElement).value).toBe('08:30');
+    expect(within(dialog).getByRole('button', { name: 'Mon' }).getAttribute('aria-pressed')).toBe('true');
+    expect(within(dialog).getByRole('switch', { name: /Set a download schedule/i }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('refuses to apply an invalid time instead of clearing the stored one', async () => {
+    // "25:00" previously became schedule_time:null — a valid "any time"
+    // schedule — and was written to every selected channel.
+    const { bulkChannelPolicy, dialog } = await openBulk();
+    fireEvent.click(within(dialog).getByRole('switch', { name: /Set a download schedule/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Mon' }));
+    fireEvent.change(within(dialog).getByLabelText(/Time \(24h, local\)/i), { target: { value: '25:00' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Apply to/ }));
+
+    await waitFor(() => expect(within(dialog).getAllByText(/24-hour HH:MM/i).length).toBeGreaterThan(1));
+    expect(bulkChannelPolicy).not.toHaveBeenCalled();
+  });
+});
+
+describe('single-channel policy modal — regressions', () => {
+  it('does not destroy a stored schedule when saving an untouched manual channel', async () => {
+    // A manual channel can legitimately hold schedule_enabled:true; flipping
+    // it back to auto should restore that schedule, so an untouched save
+    // must not send schedule_enabled:false.
+    const setChannelPolicy = vi.fn(async (_id: string, _b: unknown) => ok(channel()));
+    install(
+      fakeBridge({
+        setChannelPolicy,
+        listChannels: async () => ok([channel({ mode: 'manual', schedule_enabled: true, schedule_days: ['mon'], schedule_time: '08:30' })]),
+      }),
+    );
+    render(<ChannelsScreen />);
+    await screen.findByText('Lofi Channel');
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(setChannelPolicy).toHaveBeenCalled());
+    expect(setChannelPolicy.mock.calls[0]![1]).not.toHaveProperty('schedule_enabled');
+  });
+});

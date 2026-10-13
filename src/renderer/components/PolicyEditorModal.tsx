@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, Badge, Button, Field, Modal, Switch } from './ui';
 import { api, toast, type ChannelPolicyUpdate, type ChannelShape, type ScheduleDay } from '../lib/bridge';
 import {
@@ -38,6 +38,9 @@ export function PolicyEditorModal({
   const [time, setTime] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** True once the user actually touches the schedule switch, so an
+   *  untouched save cannot overwrite a schedule the channel already had. */
+  const [scheduleDirty, setScheduleDirty] = useState(false);
 
   useEffect(() => {
     if (!channel) return;
@@ -45,6 +48,7 @@ export function PolicyEditorModal({
     setEnabled(channel.schedule_enabled === true);
     setDays(channelScheduleDays(channel));
     setTime(channel.schedule_time ?? '');
+    setScheduleDirty(false);
     setError(null);
   }, [channel]);
 
@@ -62,7 +66,12 @@ export function PolicyEditorModal({
     setError(null);
     const patch: ChannelPolicyUpdate = cleanPolicyPatch({
       mode,
-      schedule_enabled: manual ? false : enabled,
+      // A manual channel never downloads automatically, but it can still hold
+      // a schedule: flipping it back to auto should restore it. Sending
+      // `schedule_enabled: false` here would silently destroy that stored
+      // schedule on an otherwise untouched save, so the flag is left alone
+      // unless the user actually changed the switch.
+      ...(scheduleDirty ? { schedule_enabled: manual ? false : enabled } : {}),
       schedule_days: days,
       schedule_time: timeCheck.normalized,
     });
@@ -95,7 +104,7 @@ export function PolicyEditorModal({
       <div className="stack">
         <div className="field">
           <span className="label">Downloads</span>
-          <div className="media-toggle">
+          <div className="media-toggle" role="group" aria-label="Downloads">
             <button type="button" aria-pressed={mode === 'auto'} onClick={() => setMode('auto')}>
               Automatic
             </button>
@@ -111,7 +120,15 @@ export function PolicyEditorModal({
         </div>
 
         <div className="toggle-row">
-          <Switch label="Only download on a schedule" checked={enabled} disabled={manual} onChange={setEnabled} />
+          <Switch
+            label="Only download on a schedule"
+            checked={enabled}
+            disabled={manual}
+            onChange={(v) => {
+              setEnabled(v);
+              setScheduleDirty(true);
+            }}
+          />
           <div>
             <strong>Schedule downloads</strong>
             <div className="hint">
@@ -135,15 +152,18 @@ export function PolicyEditorModal({
                 aria-pressed={days.includes(d)}
                 aria-label={DAY_LABELS[d]}
                 disabled={manual}
-                onClick={() =>
-                  setDays((prev) => {
-                    const next = toggleDay(prev, d);
-                    // Picking a day implies you want a schedule; without this
-                    // the save would silently send schedule_enabled: false.
-                    if (next.length > 0) setEnabled(true);
-                    return next;
-                  })
-                }
+                onClick={() => {
+                  // Computed outside the updater: an updater must stay pure
+                  // (React double-invokes it in StrictMode).
+                  const next = toggleDay(days, d);
+                  setDays(next);
+                  // Picking a day implies you want a schedule; without this
+                  // the save would send no schedule_enabled at all.
+                  if (next.length > 0 && !enabled) {
+                    setEnabled(true);
+                    setScheduleDirty(true);
+                  }
+                }}
               >
                 {DAY_LABELS[d]}
               </button>
@@ -167,7 +187,10 @@ export function PolicyEditorModal({
               setTime(e.target.value);
               // Same rule as the day chips: a time that is not applied would
               // be inert, so choosing one turns the schedule on.
-              if (!enabled && validateScheduleTime(e.target.value).normalized) setEnabled(true);
+              if (!enabled && validateScheduleTime(e.target.value).normalized) {
+                setEnabled(true);
+                setScheduleDirty(true);
+              }
             }}
           />
         </Field>
@@ -210,18 +233,34 @@ export function BulkPolicyModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Reset only when the SELECTION actually changes. Keying this on the
+  // array itself is a trap: ChannelsScreen passes a freshly built array on
+  // every background poll (~25s), so the effect re-ran and silently erased
+  // whatever the user had typed. Comparing the contents makes a re-render
+  // with the same selection a no-op.
+  const selection = channelIds.join(' ');
+  const lastSelection = useRef(selection);
   useEffect(() => {
+    if (lastSelection.current === selection) return;
+    lastSelection.current = selection;
     setMode('unchanged');
     setEnabled(false);
     setDays([]);
     setTime('');
     setError(null);
-  }, [channelIds]);
+  }, [selection]);
 
   const count = channelIds.length;
   const timeCheck = validateScheduleTime(time);
 
   const apply = async () => {
+    // Guard the time exactly like the single-channel editor does. Without
+    // this, "25:00" becomes null and silently CLEARS the stored time on every
+    // selected channel instead of telling the user what is wrong.
+    if (!timeCheck.ok) {
+      setError(timeCheck.reason ?? 'Invalid time.');
+      return;
+    }
     const patch: ChannelPolicyUpdate = cleanPolicyPatch({
       ...(mode === 'unchanged' ? {} : { mode }),
       // Only send schedule fields when the user opted into a schedule.
@@ -266,7 +305,7 @@ export function BulkPolicyModal({
 
         <div className="field">
           <span className="label">Downloads</span>
-          <div className="media-toggle">
+          <div className="media-toggle" role="group" aria-label="Downloads">
             <button type="button" aria-pressed={mode === 'auto'} onClick={() => setMode('auto')}>
               Make automatic
             </button>

@@ -597,6 +597,9 @@ export function describeScanResult(r: MonitorScanResult): string {
   // `held` is a policy outcome, not a failure: the videos WERE discovered,
   // they were just not downloaded because the channel is manual or not due.
   if (r.held && r.held > 0) bits.push(`${r.held} held (manual / not due)`);
-  if (r.errors.length > 0) bits.push(`${r.errors.length} error${r.errors.length === 1 ? '' : 's'}`);
+  // Tolerate a payload with no errors[] rather than crashing the screen that
+  // renders it; the scan toast is not worth taking the app down for.
+  const errors = r.errors ?? [];
+  if (errors.length > 0) bits.push(`${errors.length} error${errors.length === 1 ? '' : 's'}`);
   return bits.join(' · ');
 }

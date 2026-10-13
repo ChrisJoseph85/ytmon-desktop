@@ -140,20 +140,22 @@ check(
 );
 assertFields('Channel', [
   'id', 'channel_id', 'url', 'title', 'enabled', 'quality_override',
-  'mode', 'schedule_enabled', 'schedule_days', 'schedule_time', 'due_now', 'next_due',
   'last_checked_at', 'last_uploaded_at', 'created_at', 'updated_at',
 ]);
-// The client never computes due_now / next_due: it reads both from the server.
+// The client deliberately degrades on a server without the policy fields
+// (channelMode() treats a missing `mode` as "auto"), so a gap here is a
+// warning, not a failure: the app still runs, it just hides the schedule UI.
 {
-  const policyProps = new Set(Object.keys(C.Channel?.properties ?? {}));
-  const serverComputed = ['due_now', 'next_due'].filter((f) => !policyProps.has(f));
-  if (serverComputed.length > 0) {
-    warnings.push(
-      `Channel does NOT expose ${serverComputed.join(', ')} — the client cannot show whether a ` +
-        'scheduled channel is due without them.',
-    );
+  const have = fieldsOf('Channel');
+  const wanted = ['mode', 'schedule_enabled', 'schedule_days', 'schedule_time', 'due_now', 'next_due'];
+  const missing = wanted.filter((f) => !have.has(f));
+  if (missing.length === 0) {
+    passes.push('Channel declares the full policy field set');
   } else {
-    passes.push('Channel exposes due_now + next_due (client reads, never recomputes)');
+    warnings.push(
+      `Channel does NOT declare ${missing.join(', ')} — the client treats a missing mode as "auto" and ` +
+        'simply hides the schedule UI, so this is a feature gap rather than a break.',
+    );
   }
 }
 assertFields('MonitorScanResult', [

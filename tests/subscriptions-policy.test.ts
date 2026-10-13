@@ -13,7 +13,7 @@ import {
   toggleDay,
   validateScheduleTime,
 } from '../src/shared/schedule';
-import type { Channel } from '../src/shared/types';
+import type { Channel, MonitorScanResult } from '../src/shared/types';
 
 /**
  * Subscriptions import + per-channel scheduling.
@@ -284,5 +284,17 @@ describe('scan `held` is not an error', () => {
       errors: ['boom'],
     });
     expect(text).toContain('1 error');
+  });
+});
+/**
+ * Regressions found by review. Each of these failed before the fix.
+ */
+describe('scan results without an errors array', () => {
+  it('describeScanResult does not crash on a payload missing errors[]', () => {
+    const payload = {
+      channels_scanned: 2, discovered: 3, queued: 1, duplicates: 0, filtered: 0, held: 2,
+    } as unknown as MonitorScanResult;
+    expect(() => describeScanResult(payload)).not.toThrow();
+    expect(describeScanResult(payload)).toContain('2 held');
   });
 });

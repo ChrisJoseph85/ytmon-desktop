@@ -22,7 +22,9 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 // It performs destructive calls (watched toggles, deletes, file downloads) and
 // must never be pointed at the real phone. For the real server use the
 // read-only diagnostic:  npm run check-server -- http://192.168.1.100:8765 <token>
-const PORT = 8765;
+// Overridable: 8765 is a common adb reverse port and collides with a
+// connected device.
+const PORT = Number(process.env.SMOKE_PORT ?? 8765);
 const CDP_PORT = 9200 + (process.pid % 150);
 const BASE = `http://127.0.0.1:${PORT}`;
 

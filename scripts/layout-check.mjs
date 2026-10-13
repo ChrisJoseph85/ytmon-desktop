@@ -234,6 +234,15 @@ const MEASURE = `(() => {
   };
 })()`;
 
+/** True once the screen has actually painted rows, not just an empty shell. */
+const CONTENT_READY = `(() => {
+  const el = document.querySelector('.content');
+  if (!el) return false;
+  if (document.querySelector('.skeleton, .spinner-lg')) return false;
+  // Settings renders cards; the list screens render one child per item.
+  return el.querySelectorAll('.card, .video-card, .source-card, .browser-folder, .field, table, .empty').length > 0;
+})()`;
+
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'ytmon-layout-'));
 fs.mkdirSync(path.join(userData, 'userData'), { recursive: true });
 fs.writeFileSync(
@@ -338,8 +347,22 @@ server.listen(PORT, '127.0.0.1', async () => {
           failures += 1;
           continue;
         }
-        // Let the screen render its data before measuring.
-        await sleep(900);
+        // Wait for real content. A fixed sleep would let an empty, not-yet-
+        // fetched screen pass as "no overflow", which is a false PASS on a
+        // slow machine rather than a real check.
+        let ready = false;
+        const readyDeadline = Date.now() + 15000;
+        while (Date.now() < readyDeadline) {
+          const r = await cdp('Runtime.evaluate', { expression: CONTENT_READY, returnByValue: true });
+          if (r.result.value === true) { ready = true; break; }
+          await sleep(400);
+        }
+        if (!ready) {
+          console.log(`FAIL  ${title} — content never rendered`);
+          failures += 1;
+          continue;
+        }
+        await sleep(300);
         const m = await cdp('Runtime.evaluate', { expression: MEASURE, returnByValue: true });
         const r = m.result.value;
         if (r.error) {
