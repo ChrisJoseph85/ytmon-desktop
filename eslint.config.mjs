@@ -26,6 +26,7 @@ export default [
         clearInterval: 'readonly',
         AbortController: 'readonly',
         AbortSignal: 'readonly',
+        TextEncoder: 'readonly',
         fetch: 'readonly',
         Response: 'readonly',
         Request: 'readonly',

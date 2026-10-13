@@ -254,10 +254,11 @@ export function BulkPolicyModal({
   const timeCheck = validateScheduleTime(time);
 
   const apply = async () => {
-    // Guard the time exactly like the single-channel editor does. Without
-    // this, "25:00" becomes null and silently CLEARS the stored time on every
-    // selected channel instead of telling the user what is wrong.
-    if (!timeCheck.ok) {
+    // Guard the time exactly like the single-channel editor does — but ONLY
+    // when a time is actually part of the patch. The time field unmounts when
+    // the schedule switch is off while the value stays in state, so guarding
+    // unconditionally let a stale "25:00" block a plain "Make manual".
+    if (enabled && !timeCheck.ok) {
       setError(timeCheck.reason ?? 'Invalid time.');
       return;
     }

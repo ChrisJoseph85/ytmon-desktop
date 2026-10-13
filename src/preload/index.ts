@@ -34,10 +34,12 @@ const bridge: YtmonBridge = {
     // Cap the paste at the IPC boundary, like every other method here. Main
     // also checks, but by then the whole payload has already been copied
     // across; this is what stops an accidental 100 MB paste from doing that.
+    // Counted in UTF-8 BYTES, not characters: 4M accented characters is 8 MB
+    // on the wire, and the server's 5 MB limit is about bytes.
     importSubscriptions: (body) => {
       const b = (body ?? {}) as { source?: string; data?: unknown };
       const data = typeof b.data === 'string' ? b.data : '';
-      if (data.length > MAX_IMPORT_BYTES) {
+      if (new TextEncoder().encode(data).length > MAX_IMPORT_BYTES) {
         return Promise.resolve(fail({
           message: 'That paste is too large to send.',
           code: 'payload_too_large',

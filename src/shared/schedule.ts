@@ -154,7 +154,37 @@ export function filterChannels<T extends Channel>(channels: readonly T[], filter
   }
 }
 
-/** The `?mode=` value a server-side filter would use, or undefined for "all". */
+/**
+ * Case-folds ASCII only, matching the server's search.
+ *
+ * A full `toLowerCase()` would fold Cyrillic/Greek/accented characters too,
+ * which the server does NOT: it matches those case-SENSITIVELY. Folding more
+ * than the server would silently match channels the server would not.
+ */
+export function asciiFold(value: string): string {
+  let out = '';
+  for (const ch of value) {
+    const code = ch.codePointAt(0) ?? 0;
+    out += code >= 65 && code <= 90 ? String.fromCodePoint(code + 32) : ch;
+  }
+  return out;
+}
+
+/** Title/channel-id search with the server's ASCII-only folding. */
+export function channelMatchesSearch(
+  channel: Pick<Channel, 'title' | 'channel_id'>,
+  term: string,
+): boolean {
+  const t = term.trim();
+  if (!t) return true;
+  const needle = asciiFold(t);
+  return (
+    asciiFold(channel.title ?? '').includes(needle) ||
+    asciiFold(channel.channel_id).includes(needle)
+  );
+}
+
+/** Client-side mirror of the server's `?mode=` filter. */
 export function modeQueryParam(filter: ChannelFilter): ChannelMode | undefined {
   return filter === 'auto' || filter === 'manual' ? filter : undefined;
 }

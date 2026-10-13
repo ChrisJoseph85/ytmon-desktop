@@ -5,6 +5,7 @@ import { ChannelsScreen } from '../src/renderer/screens/ChannelsScreen';
 import { Toasts } from '../src/renderer/components/Toasts';
 import type { Result } from '../src/preload/types';
 import type { Channel, SubscriptionImportRequest, SubscriptionImportResult } from '../src/shared/types';
+import { channelMatchesSearch } from '../src/shared/schedule';
 
 /**
  * Channels screen: the Auto/Manual control, the schedule editor, the mode
@@ -366,7 +367,7 @@ describe('scan result `held`', () => {
  */
 describe('bulk policy modal — regressions', () => {
   const openBulk = async () => {
-    const bulkChannelPolicy = vi.fn(async () => ok({ updated: 2 }));
+    const bulkChannelPolicy = vi.fn(async (_body: { channel_ids: string[]; mode?: string }) => ok({ updated: 2 }));
     const listChannels = vi.fn(async () =>
       ok([channel({ channel_id: UC }), channel({ id: 2, channel_id: '@other', title: 'Other' })]),
     );
@@ -497,5 +498,78 @@ describe('channel row actions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Download now' }));
     await waitFor(() => expect(fetchLink).toHaveBeenCalled());
     expect(fetchLink.mock.calls[0]![0]).toMatchObject({ url: `https://www.youtube.com/channel/${UC}`, download: true });
+  });
+});
+
+describe('bulk editor — regressions from review', () => {
+  const openBulk = async () => {
+    const bulkChannelPolicy = vi.fn(async (_body: { channel_ids: string[]; mode?: string }) => ok({ updated: 2 }));
+    const listChannels = vi.fn(async () =>
+      ok([channel({ channel_id: UC }), channel({ id: 2, channel_id: '@other', title: 'Other' })]),
+    );
+    install(fakeBridge({ bulkChannelPolicy, listChannels }));
+    render(
+      <>
+        <ChannelsScreen />
+        <Toasts />
+      </>,
+    );
+    await screen.findByText('Lofi Channel');
+    fireEvent.click(screen.getByLabelText('Select Lofi Channel'));
+    fireEvent.click(screen.getByLabelText('Select Other'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Set schedule…' }));
+    return { bulkChannelPolicy, dialog: await screen.findByRole('dialog') };
+  };
+
+  it('is not blocked by an invalid time the user cannot see', async () => {
+    // Type a bad time, then switch the schedule OFF: the field unmounts but
+    // the value stays in state. A "Make manual" apply carries no time, so the
+    // stale value must not block it.
+    const { bulkChannelPolicy, dialog } = await openBulk();
+    fireEvent.click(within(dialog).getByRole('switch', { name: /Set a download schedule/i }));
+    fireEvent.change(within(dialog).getByLabelText(/Time \(24h, UTC\)/i), { target: { value: '25:00' } });
+    fireEvent.click(within(dialog).getByRole('switch', { name: /Set a download schedule/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Make manual' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Apply to/ }));
+
+    await waitFor(() => expect(bulkChannelPolicy).toHaveBeenCalled());
+    expect(bulkChannelPolicy.mock.calls[0]![0]).toEqual({ channel_ids: [UC, '@other'], mode: 'manual' });
+  });
+});
+
+describe('the search box applies in every view', () => {
+  it('filters the Scheduled view, which is computed client-side', async () => {
+    // Scheduled has no server-side filter, so the search has to be applied
+    // here too — otherwise the box silently does nothing in that view.
+    const scheduled = channel({ schedule_enabled: true, schedule_days: ['mon'], schedule_time: '08:30' });
+    install(
+      fakeBridge({
+        listChannels: async () =>
+          ok([
+            scheduled,
+            channel({ id: 2, channel_id: '@zzz', title: 'Unrelated Name', schedule_enabled: true, schedule_days: ['tue'] }),
+          ]),
+      }),
+    );
+    render(<ChannelsScreen />);
+    await screen.findByText('Lofi Channel');
+    fireEvent.click(within(screen.getByRole('group', { name: /Filter channels/i })).getByRole('button', { name: /Scheduled/ }));
+    await screen.findByText('Lofi Channel');
+
+    fireEvent.change(screen.getByLabelText('Search channels'), { target: { value: 'unrelated' } });
+    await waitFor(() => expect(screen.queryByText('Lofi Channel')).toBeNull());
+    expect(screen.getByText('Unrelated Name')).toBeTruthy();
+  });
+});
+
+describe('ASCII-only search folding matches the server', () => {
+  it('folds ASCII case but leaves other scripts alone', () => {
+    // toLowerCase() would fold Cyrillic too, matching channels the server
+    // (ASCII-only folding, case-sensitive) would not return.
+    expect(channelMatchesSearch({ title: 'Lofi Beats', channel_id: 'UCa' }, 'lofi')).toBe(true);
+    expect(channelMatchesSearch({ title: 'Ёжик', channel_id: 'UCb' }, 'ёжик')).toBe(false);
+    expect(channelMatchesSearch({ title: 'Ёжик', channel_id: 'UCb' }, 'ЁЖИК')).toBe(false);
+    expect(channelMatchesSearch({ title: 'Café', channel_id: 'UCc' }, 'CafÉ')).toBe(false);
+    expect(channelMatchesSearch({ title: '', channel_id: 'UCd' }, 'ucd')).toBe(true);
   });
 });

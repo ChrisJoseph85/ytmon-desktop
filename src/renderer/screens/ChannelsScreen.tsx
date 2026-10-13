@@ -13,6 +13,7 @@ import { qualityLabelsFrom } from '../lib/labels';
 import { pickCanonicalUrl, pickChannelId } from '../lib/channel-url';
 import { formatDateTime } from '@shared/format';
 import {
+  channelMatchesSearch,
   channelMode,
   describePolicy,
   filterChannels,
@@ -48,8 +49,10 @@ export function ChannelsScreen() {
     return () => clearTimeout(t);
   }, [search]);
 
-  // Unfiltered, so the pill counts stay honest under any active filter.
-  const totals = usePolling(() => api.listChannels(), 60_000);
+  // Unfiltered, so the pill counts stay honest under any active filter. In
+  // the Scheduled view `channels` already reads GET /channels unfiltered, so
+  // pause this rather than hitting the same endpoint twice out of phase.
+  const totals = usePolling(() => api.listChannels(), filter === 'scheduled' ? null : 60_000);
 
   // "Scheduled" has no server-side filter, so that one view is local; every
   // other combination is asked of the server so it does not have to ship
@@ -129,9 +132,17 @@ export function ChannelsScreen() {
   };
 
   const list = channels.data ?? EMPTY_CHANNELS;
-  // Only the "Scheduled" view is filtered locally; the rest arrive already
-  // filtered, so `list` is the visible set.
-  const visible = filter === 'scheduled' ? filterChannels(list, filter) : list;
+  // Every view except "Scheduled" arrives already filtered by the server.
+  // "Scheduled" has no server-side filter, so it is computed here — which
+  // also means the search box has to be applied here, or it silently does
+  // nothing in that one view.
+  const visible = useMemo(
+    () =>
+      filter === 'scheduled'
+        ? filterChannels(list, filter).filter((c) => channelMatchesSearch(c, debouncedSearch))
+        : list,
+    [list, filter, debouncedSearch],
+  );
   // Counts come from an unfiltered read, otherwise every pill except the
   // active one would read 0 the moment a server-side filter is applied.
   const counts = useMemo(() => {
@@ -145,6 +156,9 @@ export function ChannelsScreen() {
   }, [totals.data]);
 
   const selectedIds = useMemo(() => [...selected].filter((id) => list.some((c) => c.channel_id === id)), [selected, list]);
+  // Selecting in "All" and then filtering to "Auto" hides the hidden picks;
+  // say so rather than silently shrinking the selection under the user.
+  const hiddenSelected = selected.size - selectedIds.length;
 
   const toggleSelect = (id: string) =>
     setSelected((prev) => {
@@ -208,6 +222,11 @@ export function ChannelsScreen() {
       {selectedIds.length > 0 ? (
         <div className="row row-wrap" style={{ gap: 8 }}>
           <Badge tone="accent">{selectedIds.length} selected</Badge>
+          {hiddenSelected > 0 ? (
+            <Badge tone="warn" title="These are still selected but the current filter does not show them. They will not be included in a bulk change.">
+              {hiddenSelected} hidden by this filter
+            </Badge>
+          ) : null}
           <Button
             size="sm"
             onClick={() =>
