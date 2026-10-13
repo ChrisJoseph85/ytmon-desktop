@@ -11,6 +11,7 @@ import { fail, ok, type Result } from '../preload/types';
 import { sanitizeFilename } from '../shared/format';
 import { isQualityValue } from '../shared/quality';
 import { isChannelKey, isChannelMode, isScheduleDay, normaliseDays, validateScheduleTime } from '../shared/schedule';
+import { isDownloadKind, validateQuietHours, validateRateLimit, type RateLimitField } from '../shared/ratelimit';
 import type { ChannelPolicyUpdate, SourceQualityOverride } from '../shared/types';
 
 // Dev mode is opt-in (npm run dev sets YTMON_DEV=1). Otherwise the built
@@ -317,6 +318,86 @@ function registerIpc(): void {
     return A().importSubscriptions({ source: 'takeout', data });
   });
   handle('api:subscriptionSnapshot', (id: unknown) => A().subscriptionSnapshot(validateSnapshotId(id)));
+
+  handle('api:syncSubscriptions', () => A().syncSubscriptions());
+
+  // ---- channel uploads preview ------------------------------------------
+  handle('api:channelUploads', (id: unknown, limit?: unknown) => {
+    const n = Number(limit);
+    return A().channelUploads(validateChannelKey(id), Number.isInteger(n) && n >= 1 && n <= 50 ? n : 15);
+  });
+
+  // Queue a manual channel's backlog. Real network traffic, no undo, so the
+  // renderer is expected to dry-run first; we do not force it, but we do
+  // clamp everything the server would 422 on.
+  handle('api:downloadChannelBacklog', (id: unknown, body: unknown) => {
+    const b = (body ?? {}) as Record<string, unknown>;
+    const limit = Number(b.limit);
+    const patch: { kind?: 'video' | 'short' | 'unknown'; limit?: number; order?: 'oldest' | 'highest'; dry_run?: boolean } = {};
+    if (b.kind !== undefined && b.kind !== null) {
+      if (!isDownloadKind(b.kind)) throw new YtmonError('kind must be video, short or unknown.', 'validation_error');
+      patch.kind = b.kind;
+    }
+    if (b.limit !== undefined && b.limit !== null) {
+      if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+        throw new YtmonError('limit must be between 1 and 500.', 'validation_error');
+      }
+      patch.limit = limit;
+    }
+    if (b.order !== undefined && b.order !== null) {
+      if (b.order !== 'oldest' && b.order !== 'highest') {
+        throw new YtmonError('order must be "oldest" or "highest".', 'validation_error');
+      }
+      patch.order = b.order;
+    }
+    patch.dry_run = b.dry_run === true;
+    return A().downloadChannelBacklog(validateChannelKey(id), patch);
+  });
+
+  // ---- cookies ----------------------------------------------------------
+  handle('api:cookiesInfo', () => A().cookiesInfo());
+  handle('api:putCookies', (content: unknown) => {
+    const text = typeof content === 'string' ? content : '';
+    if (!text.trim()) {
+      throw new YtmonError(
+        'Paste the exported cookie text first.',
+        'not_a_cookie_file',
+      );
+    }
+    if (new TextEncoder().encode(text).length > 2_000_000) {
+      throw new YtmonError('That cookie export is too large.', 'payload_too_large');
+    }
+    return A().putCookies(text);
+  });
+  handle('api:deleteCookies', () => A().deleteCookies());
+
+  // ---- rate limiting / autosync settings ---------------------------------
+  const rateLimitField = (field: RateLimitField, raw: unknown): number => {
+    const r = validateRateLimit(field, raw === null || raw === undefined ? '' : String(raw));
+    if (!r.ok) throw new YtmonError(r.reason ?? 'Invalid value.', 'validation_error');
+    return r.value;
+  };
+  handle('api:setRateLimits', (body: unknown) => {
+    const b = (body ?? {}) as Record<string, unknown>;
+    const patch: Record<string, unknown> = {};
+    if (b.min_seconds_between_downloads !== undefined) {
+      patch.min_seconds_between_downloads = rateLimitField('min_seconds_between_downloads', b.min_seconds_between_downloads);
+    }
+    if (b.max_downloads_per_day !== undefined) {
+      patch.max_downloads_per_day = rateLimitField('max_downloads_per_day', b.max_downloads_per_day);
+    }
+    if (b.quiet_hours !== undefined) {
+      const q = validateQuietHours(b.quiet_hours === null ? '' : String(b.quiet_hours));
+      if (!q.ok) throw new YtmonError(q.reason ?? 'Invalid quiet hours.', 'validation_error');
+      patch.quiet_hours = q.normalized;
+    }
+    if (b.subscriptions_autosync !== undefined) patch.subscriptions_autosync = b.subscriptions_autosync === true;
+    if (b.subscriptions_autosync_minutes !== undefined) {
+      patch.subscriptions_autosync_minutes = rateLimitField('subscriptions_autosync_minutes', b.subscriptions_autosync_minutes);
+    }
+    if (Object.keys(patch).length === 0) throw new YtmonError('Nothing to change.', 'validation_error');
+    return A().setQuality(patch);
+  });
   handle('api:getMonitor', () => A().getMonitor());
   handle('api:listVideos', (q: unknown) => A().listVideos((q ?? {}) as Record<string, never>));
   handle('api:getVideo', (id: unknown, formats?: unknown) =>

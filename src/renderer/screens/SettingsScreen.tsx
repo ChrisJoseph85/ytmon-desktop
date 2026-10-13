@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Alert, Badge, Button, Card, Field, Modal, Select, Switch } from '../components/ui';
 import { RetentionConfirm } from '../components/VideoPlayer';
-import { api, toast, type MonitorShape, type QualitySettingsShape, type RetentionShape, type RetentionPlan, type StorageShape } from '../lib/bridge';
+import { api, toast, type MonitorShape, type RateLimitUpdate, type QualitySettingsShape, type RetentionShape, type RetentionPlan, type StorageShape } from '../lib/bridge';
 import { useConnection } from '../state/connection';
 import { qualityLabelsFrom, validateDownloadDir, validateSubLangs } from '../lib/labels';
 import { formatBytes } from '@shared/format';
+import { validateQuietHours, validateRateLimit } from '@shared/ratelimit';
+import { CookiesCard } from '../components/CookiesInfoPanel';
 import { StorageSettings } from './LibraryBrowser';
 import type { Quality } from '@shared/types';
 
@@ -49,6 +51,22 @@ export function SettingsScreen() {
     void api.retentionPreview().then(setPlan).catch(() => undefined);
     void api.storage().then(setStorage).catch(() => undefined);
   }, []);
+
+  /** Rate limits + autosync live on PUT /quality but go through their own
+   *  IPC handler so every value is range-checked before it reaches the wire. */
+  const saveRateLimits = async (patch: RateLimitUpdate) => {
+    setSaving(true);
+    try {
+      await api.setRateLimits(patch);
+      const fresh = await api.getQuality();
+      setQuality(fresh);
+      toast.success('Saved on the phone.');
+    } catch (e) {
+      toast.fromError(e);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const saveQuality = async (patch: Partial<QualitySettingsShape>) => {
     setSaving(true);
@@ -656,6 +674,12 @@ export function SettingsScreen() {
         )}
       </Card>
 
+      <RateLimitsCard quality={quality} onSave={(patch) => saveRateLimits(patch)} saving={saving} />
+
+      <SubscriptionsCard quality={quality} onSave={(patch) => saveRateLimits(patch)} saving={saving} />
+
+      <CookiesCard />
+
       <Card>
         <div className="card-title">
           <h2>Phone storage</h2>
@@ -809,5 +833,183 @@ function Loading() {
     <div className="row muted" style={{ gap: 8 }}>
       <span className="spinner" aria-hidden /> Loading from server…
     </div>
+  );
+}
+/**
+ * Rate limiting. These exist so a phone does not hammer YouTube into
+ * throttling (or banning) itself; all three default to off.
+ */
+function RateLimitsCard({
+  quality,
+  onSave,
+  saving,
+}: {
+  quality: QualitySettingsShape | null;
+  onSave: (patch: RateLimitUpdate) => Promise<void>;
+  saving: boolean;
+}) {
+  const [gap, setGap] = useState('');
+  const [perDay, setPerDay] = useState('');
+  const [quiet, setQuiet] = useState('');
+
+  useEffect(() => {
+    if (!quality) return;
+    setGap(String(quality.min_seconds_between_downloads ?? 0));
+    setPerDay(String(quality.max_downloads_per_day ?? 0));
+    setQuiet(quality.quiet_hours ?? '');
+  }, [quality]);
+
+  const gapCheck = validateRateLimit('min_seconds_between_downloads', gap);
+  const perDayCheck = validateRateLimit('max_downloads_per_day', perDay);
+  const quietCheck = validateQuietHours(quiet);
+
+  const save = async () => {
+    if (!gapCheck.ok || !perDayCheck.ok || !quietCheck.ok) return;
+    await onSave({
+      min_seconds_between_downloads: gapCheck.value,
+      max_downloads_per_day: perDayCheck.value,
+      quiet_hours: quietCheck.normalized,
+    });
+  };
+
+  return (
+    <Card>
+      <div className="card-title">
+        <h2>Rate limiting</h2>
+      </div>
+      <p className="card-desc">
+        Slows downloads down so YouTube does not throttle — or block — a phone that asks for too much too fast.
+        Everything here is off when left at 0 or empty.
+      </p>
+      <div className="grid-2">
+        <Field
+          label="Minimum seconds between downloads"
+          htmlFor="rate-gap"
+          hint="15–30 is a sensible start. 0 turns this off."
+          error={gapCheck.ok ? null : (gapCheck.reason ?? null)}
+        >
+          <input
+            id="rate-gap"
+            className={`input numeric${gapCheck.ok ? '' : ' input-error'}`}
+            inputMode="numeric"
+            value={gap}
+            onChange={(e) => setGap(e.target.value)}
+          />
+        </Field>
+        <Field
+          label="Maximum downloads per day"
+          htmlFor="rate-perday"
+          hint="Rolling 24h cap on starts. 100–200 is a sensible start. 0 turns this off."
+          error={perDayCheck.ok ? null : (perDayCheck.reason ?? null)}
+        >
+          <input
+            id="rate-perday"
+            className={`input numeric${perDayCheck.ok ? '' : ' input-error'}`}
+            inputMode="numeric"
+            value={perDay}
+            onChange={(e) => setPerDay(e.target.value)}
+          />
+        </Field>
+        <Field
+          label="Quiet hours"
+          htmlFor="rate-quiet"
+          hint='Overnight is fine, e.g. "22:00-07:00". Empty turns this off.'
+          error={quietCheck.ok ? null : (quietCheck.reason ?? null)}
+        >
+          <input
+            id="rate-quiet"
+            className={`input input-mono${quietCheck.ok ? '' : ' input-error'}`}
+            placeholder="22:00-07:00"
+            value={quiet}
+            onChange={(e) => setQuiet(e.target.value)}
+          />
+        </Field>
+      </div>
+      <div className="row" style={{ marginTop: 12 }}>
+        <Button
+          variant="primary"
+          loading={saving}
+          disabled={!gapCheck.ok || !perDayCheck.ok || !quietCheck.ok}
+          onClick={() => void save()}
+        >
+          Save rate limits
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+/** Subscription auto-sync: subscribe in YouTube, it shows up here. */
+function SubscriptionsCard({
+  quality,
+  onSave,
+  saving,
+}: {
+  quality: QualitySettingsShape | null;
+  onSave: (patch: RateLimitUpdate) => Promise<void>;
+  saving: boolean;
+}) {
+  const [minutes, setMinutes] = useState('');
+  const on = quality?.subscriptions_autosync === true;
+
+  useEffect(() => {
+    setMinutes(String(quality?.subscriptions_autosync_minutes ?? 360));
+  }, [quality?.subscriptions_autosync_minutes]);
+
+  const check = validateRateLimit('subscriptions_autosync_minutes', minutes);
+
+  return (
+    <Card>
+      <div className="card-title">
+        <h2>Subscription auto-sync</h2>
+      </div>
+      <p className="card-desc">
+        When on, and cookies are configured, the server re-reads your YouTube subscription feed on an interval and
+        adds anything new. New subscriptions always arrive as <strong>manual</strong> — listed with their uploads
+        discovered, but nothing auto-downloads.
+      </p>
+      <div className="toggle-row">
+        <Switch
+          label="Auto-sync subscriptions"
+          checked={on}
+          onChange={(v) => void onSave({ subscriptions_autosync: v })}
+        />
+        <div>
+          <strong>Auto-sync subscriptions</strong>
+          <div className="hint">
+            {on
+              ? 'The phone checks on its own.'
+              : 'Off — use Import subscriptions, or turn this on to keep the list fresh by itself.'}
+          </div>
+        </div>
+      </div>
+      {on ? (
+        <Field
+          label="Check every (minutes)"
+          htmlFor="autosync-minutes"
+          hint="5–10080. 360 is six hours."
+          error={check.ok ? null : (check.reason ?? null)}
+        >
+          <input
+            id="autosync-minutes"
+            className={`input numeric${check.ok ? '' : ' input-error'}`}
+            inputMode="numeric"
+            value={minutes}
+            onChange={(e) => setMinutes(e.target.value)}
+          />
+        </Field>
+      ) : null}
+      {on && !check.ok ? null : (
+        <div className="row" style={{ marginTop: 12 }}>
+          <Button
+            loading={saving}
+            disabled={!check.ok}
+            onClick={() => void onSave({ subscriptions_autosync_minutes: check.value })}
+          >
+            Save interval
+          </Button>
+        </div>
+      )}
+    </Card>
   );
 }

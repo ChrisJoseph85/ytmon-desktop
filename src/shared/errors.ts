@@ -75,6 +75,14 @@ export class YtmonError extends Error {
         return 'Pick weekdays from mon, tue, wed, thu, fri, sat, sun.';
       case 'invalid_mode':
         return 'A channel is either automatic or manual.';
+      case 'cookies_not_configured':
+        return 'The server has no cookie file configured. Set YTMON_COOKIES_FILE in its .env and restart it.';
+      case 'no_youtube_cookies':
+        return 'No youtube.com cookies were found in that export. Export again from a browser signed in to YouTube.';
+      case 'not_a_cookie_file':
+        return 'That does not look like a cookie export. Use the Netscape cookies.txt format.';
+      case 'invalid_json':
+        return 'That JSON could not be parsed.';
       default:
         return null;
     }

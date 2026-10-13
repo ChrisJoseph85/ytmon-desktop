@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { isQueuePaused } from '../../shared/types';
 import type { Result } from '../../preload/types';
 import type { YtmonBridge } from '../../preload/types';
 import type {
@@ -9,6 +10,8 @@ import type {
   ChannelMode,
   ChannelPolicyBulkRequest,
   ChannelPolicyUpdate,
+  ChannelDownloadRequest,
+  RateLimitUpdate,
   SubscriptionImportRequest,
 } from '../../shared/types';
 
@@ -77,6 +80,13 @@ export const api = {
   subscriptionSnapshot: (id: string) => call(b.api.subscriptionSnapshot(id)),
   setChannelPolicy: (id: string, body: ChannelPolicyUpdate) => call(b.api.setChannelPolicy(id, body)),
   bulkChannelPolicy: (body: ChannelPolicyBulkRequest) => call(b.api.bulkChannelPolicy(body)),
+  syncSubscriptions: () => call(b.api.syncSubscriptions()),
+  channelUploads: (id: string, limit?: number) => call(b.api.channelUploads(id, limit ?? 15)),
+  downloadChannelBacklog: (id: string, body: ChannelDownloadRequest) => call(b.api.downloadChannelBacklog(id, body)),
+  cookiesInfo: () => call(b.api.cookiesInfo()),
+  putCookies: (content: string) => call(b.api.putCookies(content)),
+  deleteCookies: () => call(b.api.deleteCookies()),
+  setRateLimits: (body: RateLimitUpdate) => call(b.api.setRateLimits(body)),
   addChannel: (x: Parameters<YtmonBridge['api']['addChannel']>[0]) => call(b.api.addChannel(x)),
   updateChannel: (id: string, x: Parameters<YtmonBridge['api']['updateChannel']>[1]) => call(b.api.updateChannel(id, x)),
   deleteChannel: (id: string) => call(b.api.deleteChannel(id)),
@@ -168,12 +178,18 @@ export type {
   ChannelMode,
   ChannelPolicyUpdate,
   ChannelPolicyBulkRequest,
+  ChannelDownloadRequest,
   ScheduleDay,
   SubscriptionImportRequest,
   SubscriptionImportResult,
   SubscriptionsStatus,
   SubscriptionSnapshot,
   SubscriptionSource,
+  ChannelUploads,
+  ChannelUpload,
+  ChannelDownloadResult,
+  CookiesInfo,
+  RateLimitUpdate,
   DeleteResult as DeleteResultShape,
   QueueStats as QueueStatsShape,
   QualitySettings as QualitySettingsShape,
@@ -206,6 +222,7 @@ export type {
   HealthStatus,
   WorkerState,
 } from '../../shared/types';
+export { isQueuePaused };
 export type { TransferSnapshot as TransferShape } from '../../main/transfers';
 export type { PublicSettings } from '../../preload/types';
 

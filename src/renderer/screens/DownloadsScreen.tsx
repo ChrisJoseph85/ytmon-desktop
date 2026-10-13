@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Alert, Badge, Button, Card, EmptyState, Loading, Progress } from '../components/ui';
-import { api, files, toast, type JobShape, type QueueStatsShape, type TransferShape } from '../lib/bridge';
+import { api, files, toast, isQueuePaused, type JobShape, type QueueStatsShape, type TransferShape } from '../lib/bridge';
 import { STATE_LABELS } from '@shared/quality';
 import { formatBytes, formatEta } from '@shared/format';
 
@@ -94,6 +94,21 @@ export function DownloadsScreen() {
       {error ? (
         <Alert tone="danger" action={<Button size="sm" onClick={() => void load()}>Retry</Button>}>
           {error}
+        </Alert>
+      ) : null}
+
+      {/* Without this the screen looks broken whenever nothing is happening:
+          items sit in `queued` and nothing moves. The server explains why,
+          so show its reason verbatim rather than guessing. */}
+      {stats && isQueuePaused(stats) ? (
+        <Alert tone="warn">
+          <div>
+            <strong>Downloads are paused</strong> — {stats.paused_reason}. Anything already downloading keeps going.
+            {stats.max_downloads_per_day
+              ? ` ${stats.started_last_24h ?? 0} of ${stats.max_downloads_per_day} started in the last 24h.`
+              : ''}
+            {stats.quiet_hours ? ` Quiet hours: ${stats.quiet_hours}.` : ''}
+          </div>
         </Alert>
       ) : null}
 

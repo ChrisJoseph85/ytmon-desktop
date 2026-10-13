@@ -19,6 +19,7 @@ import type {
   RetentionResult,
   FetchRequest,
   FetchResult,
+  ContentKind,
   RetentionUpdate,
   ScanAllResult,
   Source,
@@ -27,6 +28,9 @@ import type {
   SourcesStatus,
   SourceUpdate,
   SourceQualityOverride,
+  ChannelDownloadResult,
+  ChannelUploads,
+  CookiesInfo,
   SubscriptionImportRequest,
   SubscriptionImportResult,
   SubscriptionsStatus,
@@ -66,6 +70,8 @@ export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
   query?: Record<string, string | number | boolean | undefined | null>;
+  /** Extra headers, e.g. a non-JSON content-type. */
+  headers?: Record<string, string>;
   timeoutMs?: number;
   signal?: AbortSignal;
   raw?: boolean;
@@ -138,10 +144,13 @@ export class YtmonApi {
 
     let res: Response;
     try {
+      // `raw` sends the body verbatim as text/plain instead of JSON-encoding
+      // it. Used by PUT /cookies, which accepts a cookie jar pasted as-is.
+      const isRaw = opts.raw === true && typeof opts.body === 'string';
       res = await this.fetchImpl(this.buildUrl(path, opts.query), {
         method,
-        headers: this.headers(opts.body !== undefined),
-        body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+        headers: { ...this.headers(opts.body !== undefined && !isRaw), ...(opts.headers ?? {}) },
+        body: opts.body === undefined ? undefined : isRaw ? (opts.body as string) : JSON.stringify(opts.body),
         signal,
       });
     } catch (err) {
@@ -270,6 +279,68 @@ export class YtmonApi {
   bulkChannelPolicy(body: ChannelPolicyBulkRequest, signal?: AbortSignal) {
     return this.request<ChannelPolicyBulkResult>('/channels/policy/bulk', { method: 'POST', body, signal });
   }
+  /**
+   * GET /channels/{id}/uploads — a PREVIEW from YouTube's public RSS feed.
+   * Nothing is queued and the library is untouched. The feed cannot tell a
+   * Short from a video, so `kind` is always "unknown" and callers must not
+   * build a Shorts filter from it.
+   */
+  channelUploads(channelId: string, limit = 15, signal?: AbortSignal) {
+    return this.request<ChannelUploads>(`/channels/${encodeURIComponent(channelId)}/uploads`, {
+      query: { limit: Math.min(50, Math.max(1, limit)) },
+      signal,
+    });
+  }
+  /**
+   * POST /channels/{id}/download — queue everything this channel has
+   * DISCOVERED but not downloaded. This is how a manual channel's backlog
+   * gets cleared.
+   *
+   * There is no undo and this is real network traffic, so ALWAYS call it
+   * with dry_run:true first, show the counts, and only then repeat without
+   * the flag.
+   */
+  downloadChannelBacklog(
+    channelId: string,
+    body: { kind?: ContentKind; limit?: number; order?: 'oldest' | 'highest'; dry_run?: boolean },
+    signal?: AbortSignal,
+  ) {
+    return this.request<ChannelDownloadResult>(`/channels/${encodeURIComponent(channelId)}/download`, {
+      method: 'POST',
+      body,
+      signal,
+    });
+  }
+
+  // ---- cookies --------------------------------------------------------
+  /** Metadata only; the cookie CONTENT is never returned by the server. */
+  cookiesInfo(signal?: AbortSignal) {
+    return this.request<CookiesInfo>('/cookies', { signal });
+  }
+  /** PUT /cookies with the raw text. The server filters to youtube.com. */
+  putCookies(content: string, signal?: AbortSignal) {
+    return this.request<CookiesInfo>('/cookies', {
+      method: 'PUT',
+      body: content,
+      headers: { 'content-type': 'text/plain' },
+      timeoutMs: 60_000,
+      raw: true,
+      signal,
+    });
+  }
+  deleteCookies(signal?: AbortSignal) {
+    return this.request<CookiesInfo>('/cookies', { method: 'DELETE', signal });
+  }
+
+  /** Force a subscription sync pass now. Same rules as auto-sync. */
+  syncSubscriptions(signal?: AbortSignal) {
+    return this.request<{ imported: number; updated: number; total: number }>('/subscriptions/sync', {
+      method: 'POST',
+      timeoutMs: 120_000,
+      signal,
+    });
+  }
+
   scanChannel(channelId: string, signal?: AbortSignal) {
     return this.request<MonitorScanResult>(`/channels/${encodeURIComponent(channelId)}/scan`, {
       method: 'POST',

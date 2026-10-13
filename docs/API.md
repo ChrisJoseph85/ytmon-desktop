@@ -31,7 +31,11 @@ API version: `v1`. Expected server version: `1.0.0`.
 | DELETE | `/channels/{channel_id}` | Remove a channel |
 | POST | `/channels/{channel_id}/scan` | Scan one channel now |
 | GET | `/subscriptions` | Channels with `?mode=auto|manual` and `?search=` (both server-side) |
-| GET | `/subscriptions/status` | `cookies_configured` + "last imported … from takeout" |
+| GET | `/subscriptions/status` | `cookies_configured`, auto-sync state, "last imported … from takeout" |
+| POST | `/subscriptions/sync` | "Sync now" — force a subscription pass |
+| GET | `/channels/{channel_id}/uploads` | Channel page: recent uploads as a **preview** |
+| POST | `/channels/{channel_id}/download` | Queue a channel's discovered-but-not-downloaded backlog |
+| GET/PUT/DELETE | `/cookies` | Cookie metadata / paste an export / delete |
 | POST | `/subscriptions/import` | Import Takeout JSON (`data`) or the cookie-backed feed |
 | GET | `/subscriptions/snapshots/{id}` | Re-read a stored import at any time |
 | POST | `/monitor/check` | Resolve a URL to a channel without adding it |
@@ -190,6 +194,10 @@ GET  /subscriptions/snapshots/{id} -> a stored import, re-read at any time
 | `invalid_takeout` | 400 | The pasted JSON is not a subscriptions array. |
 | `import_failed` | 400 | Feed import failed — almost always expired cookies. |
 | `invalid_mode` / `invalid_schedule_days` / `invalid_schedule_time` | 422 | Rejected in the main process before any request is sent, with the accepted form spelled out. |
+| `no_youtube_cookies` | 400 | The export contained no youtube.com cookies. |
+| `cookies_not_configured` | 400 | `YTMON_COOKIES_FILE` is not set on the server; its message is shown verbatim. |
+| `not_a_cookie_file` | 400 | The pasted text is not a Netscape cookies.txt export. |
+| `invalid_json` | 400 | The pasted JSON could not be parsed. |
 | `validation_error` | 422 | Also used for an empty policy patch ("Nothing to change") and an empty selection. Field errors from the server are mapped onto form fields. |
 
 Timestamps are ISO-8601 UTC strings or `null`. `speed` is bytes/sec, `eta` is seconds, `progress` is
@@ -384,3 +392,79 @@ retrieval. The YouTube Data API is **not** a general-purpose video-file download
 is downloadable and not every resolution exists; unavailable/private/restricted/removed/DRM-protected
 videos get the `unavailable` state and are never retried. This client does not bypass DRM or any
 access control, and only handles content the user's rights permit.
+
+## Channel uploads preview
+
+`GET /channels/{channel_id}/uploads?limit=1..50` (default 15) backs "open a channel, see its
+videos". Read from YouTube's public RSS feed, so it is fast and needs no cookies or quota.
+
+Three properties the client is built around:
+
+- It is a **preview**. Nothing is queued, nothing is downloaded, the library is untouched.
+  Downloading is always a separate, explicit action.
+- `kind` is **always `"unknown"`** and `shorts_detectable` is **always `false`** — the feed
+  cannot tell a Short from a video. The client therefore renders these as plain videos and offers
+  **no Shorts filter**. If a real `kind` arrives from `/videos` or `/videos/fetch`, prefer it.
+- `thumbnail` is a plain YouTube URL, which hangs on a phone with no internet. The client tries the
+  server's cached `GET /videos/{video_id}/thumbnail` first and falls back to the plain URL.
+
+Imported channels often have `title: null` — the id is certain, the display name is not — so the
+channel id is used as the label until the server learns the name after the first scan.
+
+## Trigger download
+
+`POST /channels/{channel_id}/download {kind?, limit?, order?, dry_run?}` queues everything the
+channel has **discovered but not downloaded**. This is how a `manual` channel's backlog is cleared;
+it is the entire point of manual mode.
+
+The client **always** calls it with `dry_run: true` first, shows
+`{considered, queued, already_downloaded}`, and only repeats without the flag after an explicit
+confirm. There is no undo and it is real network traffic.
+
+`POST /videos/fetch` accepts `kind` and returns a new `filtered[]` array, so a Shorts-filtered
+fetch can say "3 Shorts of 20 items" instead of dropping 17 silently.
+
+## Rate limiting and `paused_reason`
+
+`PUT /quality` gains `min_seconds_between_downloads` (0–3600), `max_downloads_per_day` (0–10000)
+and `quiet_hours` ("HH:MM-HH:MM", overnight allowed). All default to off. They exist so a phone
+does not get YouTube to throttle or block it.
+
+`GET /queue/stats` gains `max_concurrent_downloads`, the three limits above, `started_last_24h`
+and **`paused_reason`** — null when downloads can start, otherwise a human-readable reason they
+cannot ("inside quiet hours 22:00-07:00", "daily cap of 50 reached").
+
+The Downloads screen renders that reason as a banner. Without it the screen looks broken whenever
+nothing is happening: items sit in `queued` and nothing appears to move.
+
+## Subscription auto-sync
+
+`PUT /quality` gains `subscriptions_autosync` (default **false**) and
+`subscriptions_autosync_minutes` (5–10080, default 360). When enabled *and* cookies are
+configured, the server re-reads the subscription feed on that interval. `POST /subscriptions/sync`
+forces a pass.
+
+A new subscription is always created as `mode="manual"` — listed, its uploads discovered, nothing
+auto-downloaded — while an existing channel keeps the mode and schedule it already had.
+
+When auto-sync is off the client says so explicitly rather than implying the list keeps itself
+fresh, and `autosync_error` (usually "cookies logged out") is surfaced verbatim.
+
+It reads the same feed as the manual import, so it only sees channels that posted recently; it is
+not a complete list. That still needs Takeout.
+
+## Cookies
+
+`GET /cookies` returns metadata only — `configured`, `path`, `exists`, `size_bytes`,
+`cookie_count`, `domains`, `dropped_non_youtube`. The content is never returned.
+
+`PUT /cookies` accepts the raw text (`text/plain`) or `{"content": "..."}`. `DELETE` removes them.
+Off by default unless `YTMON_COOKIES_FILE` is set in the server's .env; without it, `PUT` returns
+`400 cookies_not_configured` and the client shows that message verbatim.
+
+Uploads are filtered to youtube.com / googlevideo.com cookies, so a browser-wide export silently
+loses most of its size — `dropped_non_youtube` is shown so the smaller number is explained.
+
+Cookies are only used to **read** Watch Later and the subscription feed. They are deliberately not
+sent for ordinary downloads: doing so makes YouTube reject every extraction with "The page needs to
+be reloaded". The client adds no cookie handling of its own.

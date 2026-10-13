@@ -22,6 +22,7 @@ export default defineConfig({
     environmentMatchGlobs: [
       ['tests/renderer.test.tsx', 'jsdom'],
       ['tests/channels-policy.test.tsx', 'jsdom'],
+      ['tests/update-subscriptions.test.tsx', 'jsdom'],
     ],
     // The renderer suites poll and animate; the 1s default async timeout makes
     // them flaky on a loaded machine rather than on a real failure.

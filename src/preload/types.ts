@@ -109,6 +109,34 @@ export interface YtmonBridge {
     ): Promise<Result<import('../shared/types').Channel>>;
     /** One policy patch across many channels. */
     bulkChannelPolicy(body: import('../shared/types').ChannelPolicyBulkRequest): Promise<Result<import('../shared/types').ChannelPolicyBulkResult>>;
+
+    /** Force a subscription sync pass now (same rules as auto-sync). */
+    syncSubscriptions(): Promise<Result<{ imported: number; updated: number; total: number }>>;
+    /**
+     * PREVIEW from YouTube's public RSS feed: nothing queued, library
+     * untouched. `kind` is always "unknown" and shorts_detectable false —
+     * never build a Shorts filter from this.
+     */
+    channelUploads(channelId: string, limit?: number): Promise<Result<import('../shared/types').ChannelUploads>>;
+    /** Queue a channel's discovered-but-not-downloaded backlog. Dry-run first. */
+    downloadChannelBacklog(
+      channelId: string,
+      body: import('../shared/types').ChannelDownloadRequest,
+    ): Promise<Result<import('../shared/types').ChannelDownloadResult>>;
+
+    /** Cookie metadata. The content is NEVER returned by the server. */
+    cookiesInfo(): Promise<Result<import('../shared/types').CookiesInfo>>;
+    putCookies(content: string): Promise<Result<import('../shared/types').CookiesInfo>>;
+    deleteCookies(): Promise<Result<import('../shared/types').CookiesInfo>>;
+
+    /** Rate limits + subscription autosync, all merged by PUT /quality. */
+    setRateLimits(body: {
+      min_seconds_between_downloads?: number;
+      max_downloads_per_day?: number;
+      quiet_hours?: string | null;
+      subscriptions_autosync?: boolean;
+      subscriptions_autosync_minutes?: number;
+    }): Promise<Result<import('../shared/types').QualitySettings>>;
     addChannel(body: {
       url: string;
       channel_id?: string;

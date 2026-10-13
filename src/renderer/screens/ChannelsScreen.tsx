@@ -4,6 +4,7 @@ import { api, toast, type ChannelShape, type SubscriptionsStatus } from '../lib/
 import { usePolling } from '../lib/hooks';
 import { BulkAddModal } from '../components/BulkAddModal';
 import { PolicyEditorModal, BulkPolicyModal } from '../components/PolicyEditorModal';
+import { ChannelUploadsModal } from '../components/ChannelUploadsModal';
 import {
   CookiesBadge,
   ImportSubscriptionsModal,
@@ -43,6 +44,8 @@ export function ChannelsScreen() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkPolicyOpen, setBulkPolicyOpen] = useState(false);
   const [downloading, setDownloading] = useState<string | null>(null);
+  const [uploadsFor, setUploadsFor] = useState<ChannelShape | null>(null);
+  const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search.trim()), 280);
@@ -168,6 +171,23 @@ export function ChannelsScreen() {
       return next;
     });
 
+  const syncNow = async () => {
+    setSyncing(true);
+    try {
+      const r = await api.syncSubscriptions();
+      toast.success(
+        r.imported > 0
+          ? `Added ${r.imported} new channel${r.imported === 1 ? '' : 's'} — as manual, so nothing auto-downloads.`
+          : 'No new channels.',
+      );
+      refreshAll();
+    } catch (e) {
+      toast.fromError(e);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const refreshAll = () => {
     channels.refresh();
     void api.subscriptionsStatus().then(setSubStatus).catch(() => undefined);
@@ -218,6 +238,8 @@ export function ChannelsScreen() {
         <LastImportLine status={subStatus} />
         <CookiesBadge status={subStatus} />
       </div>
+
+      <AutosyncBar status={subStatus} syncing={syncing} onSync={() => void syncNow()} />
 
       {selectedIds.length > 0 ? (
         <div className="row row-wrap" style={{ gap: 8 }}>
@@ -369,6 +391,9 @@ export function ChannelsScreen() {
                   >
                     Download now
                   </Button>
+                  <Button size="sm" onClick={() => setUploadsFor(c)} title="Preview this channel's recent uploads">
+                    Uploads
+                  </Button>
                   <Button size="sm" onClick={() => setEditing(c)}>
                     Edit
                   </Button>
@@ -434,6 +459,11 @@ export function ChannelsScreen() {
           setEditing(null);
           channels.refresh();
         }}
+      />
+      <ChannelUploadsModal
+        channel={uploadsFor}
+        onClose={() => setUploadsFor(null)}
+        onLibraryChanged={refreshAll}
       />
       <PolicyEditorModal
         channel={policyFor}
@@ -693,5 +723,52 @@ function EditChannelModal({
         </div>
       </div>
     </Modal>
+  );
+}
+
+/**
+ * Auto-sync state. When it is off the list does NOT update by itself, and
+ * saying otherwise would be a lie the user finds out about later.
+ */
+function AutosyncBar({
+  status,
+  syncing,
+  onSync,
+}: {
+  status: SubscriptionsStatus | null;
+  syncing: boolean;
+  onSync: () => void;
+}) {
+  if (!status) return null;
+  const on = status.autosync_enabled === true;
+  const lastSync = status.autosync_last_sync;
+
+  return (
+    <div className="stack" style={{ gap: 6 }}>
+      {status.autosync_error ? (
+        <Alert tone="warn">
+          <strong>Auto-sync failed</strong> — {status.autosync_error}
+        </Alert>
+      ) : null}
+      {!on ? (
+        <Alert tone="info">
+          Auto-sync is off — this list does not update by itself. Pull to refresh, or turn auto-sync on in Settings.
+        </Alert>
+      ) : (
+        <div className="row row-wrap" style={{ gap: 8 }}>
+          <Badge tone="success">
+            Auto-sync every {Math.round((status.autosync_interval_minutes ?? 360) / 60)}h
+          </Badge>
+          <span className="tiny faint">
+            {lastSync ? `Last checked ${formatDateTime(lastSync)}` : 'Not run yet'}
+            {status.autosync_last_added ? ` · ${status.autosync_last_added} added` : ''}
+          </span>
+          <span className="spacer" />
+          <Button size="sm" loading={syncing} onClick={onSync}>
+            Sync now
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }

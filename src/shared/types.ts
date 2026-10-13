@@ -197,6 +197,13 @@ export interface SubscriptionImportResult {
 export interface SubscriptionsStatus {
   /** Without this the "feed" source cannot work at all. */
   cookies_configured: boolean;
+  autosync_enabled?: boolean;
+  autosync_interval_minutes?: number;
+  autosync_last_sync?: string | null;
+  /** Channels added on the last pass. */
+  autosync_last_added?: number | null;
+  /** Usually "cookies logged out". Surfaced verbatim in the UI. */
+  autosync_error?: string | null;
   subscriptions?: number;
   /** A stored import; the channel list survives cookie expiry because of it. */
   last_import_at?: string | null;
@@ -272,6 +279,19 @@ export interface QueueStats {
   failed: number;
   skipped: number;
   unavailable: number;
+  // Rate-limit state. Older servers omit all of these.
+  max_concurrent_downloads?: number;
+  min_seconds_between_downloads?: number;
+  max_downloads_per_day?: number;
+  quiet_hours?: string | null;
+  /** Downloads started in the last 24h, for the daily cap. */
+  started_last_24h?: number;
+  /**
+   * Null when downloads can start, otherwise why they cannot, e.g.
+   * "inside quiet hours 22:00-07:00". Without this the Downloads screen
+   * looks broken: items sit queued and nothing appears to happen.
+   */
+  paused_reason?: string | null;
 }
 
 export interface FileMetadata {
@@ -308,6 +328,20 @@ export interface QualitySettings {
   max_concurrent_downloads: number;
   /** Directory on the PHONE. Existing files stay reachable after it changes. */
   download_dir: string | null;
+
+  // ---- subscriptions auto-sync ---------------------------------------
+  /** Re-read the YouTube subscription feed on an interval. Off by default. */
+  subscriptions_autosync?: boolean;
+  /** 5..10080 minutes. Only meaningful while autosync is on. */
+  subscriptions_autosync_minutes?: number;
+
+  // ---- rate limiting (all 0/null = off) -------------------------------
+  /** 0..3600 seconds to wait between STARTING downloads. */
+  min_seconds_between_downloads?: number;
+  /** 0..10000 rolling 24h cap on download starts. 0 = unlimited. */
+  max_downloads_per_day?: number;
+  /** "HH:MM-HH:MM", overnight allowed, e.g. "22:00-07:00". null = off. */
+  quiet_hours?: string | null;
 }
 
 export interface MonitorSettings {
@@ -551,6 +585,8 @@ export interface FetchRequest {
   url: string;
   /** false = PREVIEW ONLY: resolves and reports, queues nothing. */
   download?: boolean;
+  /** Server-side filter for links that resolve to many items. */
+  kind?: ContentKind;
   media_type?: MediaType | null;
   quality?: Quality | null;
   limit?: number;
@@ -560,6 +596,11 @@ export interface FetchRequest {
 
 export interface FetchResult {
   kind: 'video' | 'playlist' | string;
+  /**
+   * Items dropped by a `kind` filter. Without it a Shorts-filtered fetch
+   * would silently lose 17 of 20 results.
+   */
+  filtered?: string[];
   url?: string;
   playlist_title?: string | null;
   resolved: number;
@@ -661,4 +702,81 @@ export interface VideoQuery {
   order?: 'asc' | 'desc';
   page?: number;
   page_size?: number;
+}
+// ---- channel uploads preview -------------------------------------------
+
+export interface ChannelUpload {
+  video_id: string;
+  title: string;
+  channel_id: string;
+  /** Null for a channel imported from cookies whose name is not known yet. */
+  channel_title: string | null;
+  published_at: string | null;
+  /** Plain YouTube URL; prefer the server-cached thumbnail once in library. */
+  thumbnail: string | null;
+  /** ALWAYS "unknown" from this endpoint — the RSS feed cannot tell. */
+  kind: ContentKind;
+}
+
+/**
+ * GET /channels/{channel_id}/uploads — a PREVIEW read from YouTube's public
+ * RSS feed. Nothing is queued and the library is untouched.
+ */
+export interface ChannelUploads {
+  channel_id: string;
+  channel_title: string | null;
+  count: number;
+  /** ALWAYS false: the feed cannot distinguish a Short. */
+  shorts_detectable: boolean;
+  uploads: ChannelUpload[];
+}
+
+// ---- trigger download ----------------------------------------------------
+
+export interface ChannelDownloadRequest {
+  kind?: ContentKind;
+  /** 1..500, default 50. */
+  limit?: number;
+  order?: 'oldest' | 'highest';
+  /** true = count what WOULD queue. Always call this first. */
+  dry_run?: boolean;
+}
+
+export interface ChannelDownloadResult {
+  channel_id: string;
+  considered: number;
+  queued: number;
+  already_downloaded: number;
+  video_ids: string[];
+  dry_run: boolean;
+}
+
+/** PATCH body for the rate-limit / autosync settings group. */
+export interface RateLimitUpdate {
+  min_seconds_between_downloads?: number;
+  max_downloads_per_day?: number;
+  quiet_hours?: string | null;
+  subscriptions_autosync?: boolean;
+  subscriptions_autosync_minutes?: number;
+}
+
+// ---- cookies -------------------------------------------------------------
+
+export interface CookiesInfo {
+  configured: boolean;
+  path: string | null;
+  exists: boolean;
+  size_bytes: number;
+  cookie_count: number;
+  domains?: string[];
+  /**
+   * Cookies dropped because they were not youtube.com / googlevideo.com.
+   * A browser-wide export looks huge but most of it is thrown away.
+   */
+  dropped_non_youtube?: number;
+}
+
+/** Downloads start here only while paused_reason is null. */
+export function isQueuePaused(stats: QueueStats | null | undefined): boolean {
+  return typeof stats?.paused_reason === 'string' && stats.paused_reason.length > 0;
 }
